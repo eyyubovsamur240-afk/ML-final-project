@@ -72,8 +72,26 @@ def test_load_rejects_other_pickles(tmp_path):
         PricePredictor.load(path)
 
 
-def test_interval_calibrated_on_test(model):
-    assert 0.6 <= model.metrics_["interval_coverage"] <= 0.95
+def test_interval_calibrated_without_test(model):
+    """Calibrated on out-of-bag residuals, the band still covers ~80% of test."""
+    assert 0.65 <= model.metrics_["interval_coverage"] <= 0.95
+    assert "out-of-bag" in model.metrics_["interval_calibration"]
+
+
+def test_oob_replay_matches_forest():
+    """oob_predict replays RandomForest's bootstrap draws; a drift would raise."""
+    from src.ensemble import RandomForest
+    from app.predictor import conformal_quantiles, oob_predict
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(300, 4))
+    y = X[:, 0] + 0.1 * rng.normal(size=300)
+    rf = RandomForest("regression", n_estimators=10, max_features=1 / 3, random_state=7).fit(X, y)
+    oob = oob_predict(rf, X, y, seed=7)
+    assert np.isfinite(oob).mean() > 0.95                     # ~(1-1/e)^10 rows never OOB
+    with pytest.raises(RuntimeError):
+        oob_predict(rf, X, y, seed=8)                          # wrong seed is caught
+    lo, hi = conformal_quantiles(y - np.nan_to_num(oob), 0.8)
+    assert lo < 0 < hi
 
 
 # ------------------------------------------------------------------ HTTP API

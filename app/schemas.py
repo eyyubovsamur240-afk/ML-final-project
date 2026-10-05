@@ -57,7 +57,7 @@ class Factor(BaseModel):
 
 class PredictionOut(BaseModel):
     price_azn: float
-    price_low_azn: float = Field(description="Lower end of the 80% range (held-out residuals)")
+    price_low_azn: float = Field(description="Lower end of the 80% range (split-conformal on out-of-bag residuals)")
     price_high_azn: float
     price_per_m2_azn: float
     premium: bool
