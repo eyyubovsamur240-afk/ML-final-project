@@ -42,7 +42,7 @@
     \column{0.5\textwidth}
     \begin{itemize}
       \item bina.az sale listings (Kaggle): \NRaw{} raw rows $\to$ \NClean{} clean
-      \item \textbf{Task A}: regression of $\log(\text{price})$ \\ (skewness \PriceSkew{} $\to$ \LogPriceSkew{} after the log)
+      \item \textbf{Task A}: regression of $\log(\text{price})$ \\ (skewness \PriceSkew{} $\to$ \LogPriceSkew{} after the log)\\ trees learn $\log$ price per m$^2$, then add $\log$ area back
       \item \textbf{Task B}: premium vs.\ standard, split at the \emph{training} median (\TierThreshold{} AZN)
       \item 70/15/15 split, stratified on price deciles: \NTrain{} / \NVal{} / \NTest
       \item Tree and SVM are \textbf{our own NumPy code}; scikit-learn only as a baseline
@@ -62,7 +62,7 @@
       \item Duplicates and re-posts removed; fixed plausibility rules
       \item \textbf{Leakage dropped:} \LeakageCols{} (both functions of price), plus identifiers and promo flags
       \item Imputation, one-hot levels, scaling and the tier threshold are fitted on \textbf{train only}
-      \item \NFeatures{} features: size, floors, coordinates, distance to centre, flags, district one-hot
+      \item \NFeatures{} features: size, floors, coordinates, distance to centre, flags, district one-hot, metro/settlement tags
     \end{itemize}
     \column{0.46\textwidth}
     \resizebox{\linewidth}{!}{\gen{tab_cleaning}}
