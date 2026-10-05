@@ -204,3 +204,14 @@ def test_matches_sklearn_on_float_data_near_float32_resolution(task):
     # every difference is explained by ties or by sklearn's float32 cast
     assert stats["gain_mismatch"] == 0 and stats["decision_mismatch"] == 0, stats
     assert stats["max_threshold_diff"] < 1e-5
+
+
+def test_node_split_only_in_float64_is_a_float32_divergence():
+    """Two rows whose feature differs only below float32 resolution: we split, sklearn cannot."""
+    X = np.array([[40.38784118730932], [40.38784118730935], [41.0], [41.5]])
+    y = np.array([0, 1, 1, 1])
+    ours = DecisionTree(task="classification").fit(X, y)
+    sk = DecisionTreeClassifier(random_state=0).fit(X, y)
+    stats = compare_tree_structure(ours, sk, X, y)
+    assert stats["decision_mismatch"] == 0 and stats["gain_mismatch"] == 0, stats
+    assert stats["float32_divergence"] >= 1
