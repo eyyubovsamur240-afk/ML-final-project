@@ -273,6 +273,107 @@ def _bold_best(values: list, higher: bool) -> list[bool]:
     return [bool(np.isfinite(a) and np.isclose(a, best)) for a in arr]
 
 
+EXPLAIN_MACROS = ("ExplainRefModel", "PermTopReg", "PermTopClf", "PermTopRegGroup", "PermTopClfGroup",
+                  "PermAgreeReg", "PermAgreeClf", "PermRepeats", "PermGroups",
+                  "WeakDistrict", "WeakDistrictRMSE", "WeakDistrictN", "StrongDistrict", "StrongDistrictRMSE",
+                  "OverallRefRMSE", "WeakBand", "WeakBandRMSE", "StrongBand", "StrongBandRMSE",
+                  "TopBandBias", "BottomBandBias", "WeakTierDistrict", "WeakTierDistrictErr",
+                  "WeakTierBand", "WeakTierBandErr")
+
+
+def _agree_sentence(top1: dict) -> str:
+    groups = set(top1.values())
+    if len(groups) == 1:
+        return f"All {len(top1)} models rank {tex_escape(next(iter(groups)))} first."
+    parts = ", ".join(f"{tex_escape(m.replace('Our ', ''))}: {tex_escape(g)}" for m, g in top1.items())
+    return f"The models disagree on the most important feature ({parts})."
+
+
+def _explain(T: TexWriter, R: dict) -> None:
+    """Permutation importance + error breakdown (src/explain.py)."""
+    E = R.get("explain")
+    if not E:
+        for k in EXPLAIN_MACROS:
+            T.macro(k, "--")
+        T.table("tab_error_district", "(explanations skipped)")
+        T.table("tab_error_band", "(explanations skipped)")
+        return
+    ref = E["ref_reg"]
+    T.macro("ExplainRefModel", tex_escape(ref.replace("Our ", "our ")))
+    T.macro("PermTopReg", tex_escape(", ".join(f"{g} (RMSE +{v:.3f})" for g, v in E["top_reg"][:4])))
+    T.macro("PermTopClf", tex_escape(", ".join(f"{g} (AUC -{v:.3f})" for g, v in E["top_clf"][:4])))
+    T.macro("PermTopRegGroup", tex_escape(E["top_reg"][0][0]))
+    T.macro("PermTopClfGroup", tex_escape(E["top_clf"][0][0]))
+    T.macro("PermAgreeReg", _agree_sentence(E["top1_reg"]))
+    T.macro("PermAgreeClf", _agree_sentence(E["top1_clf"]))
+    T.macro("PermRepeats", str(E["n_repeats"]))
+    T.macro("PermGroups", str(E["n_groups"]))
+
+    reg_models = list(E["overall_rmse"])
+    clf_models = list(E["overall_tier_err"])
+    short = {"Our tree": "Tree", "Our ridge": "Ridge", "Our random forest": "RF",
+             "Our gradient boosting": "GB", "Our RFF SVM": "SVM"}
+
+    def table(rows, first):
+        header = [first, "$n$"] + [short.get(m, m) for m in reg_models] + \
+                 [f"{short.get(m, m)} err." for m in clf_models]
+        body = [[tex_escape(r["group"]), num(r["n"], 0)]
+                + [num(r["rmse"][m]) for m in reg_models]
+                + [pct(r["tier_err"][m]) for m in clf_models] for r in rows]
+        body.append(["MIDRULE"])
+        body.append(["All test", num(sum(r["n"] for r in rows), 0)]
+                    + [num(E["overall_rmse"][m]) for m in reg_models]
+                    + [pct(E["overall_tier_err"][m]) for m in clf_models])
+        cols = "@{}lr" + "c" * len(reg_models) + "c" * len(clf_models) + "@{}"
+        return _tabular(cols, header, body, size=r"\scriptsize")
+
+    T.table("tab_error_district", table(E["by_district"], "District"))
+    T.table("tab_error_band", table(E["by_price_band"], "Price (AZN)"))
+    T.macro("OverallRefRMSE", num(E["overall_rmse"][ref]))
+
+    named = [r for r in E["by_district"] if r["group"] not in ("other", "(none)")] or E["by_district"]
+    weak = max(named, key=lambda r: r["rmse"][ref])
+    strong = min(named, key=lambda r: r["rmse"][ref])
+    T.macro("WeakDistrict", tex_escape(weak["group"]))
+    T.macro("WeakDistrictRMSE", num(weak["rmse"][ref]))
+    T.macro("WeakDistrictN", num(weak["n"], 0))
+    T.macro("StrongDistrict", tex_escape(strong["group"]))
+    T.macro("StrongDistrictRMSE", num(strong["rmse"][ref]))
+    bands = E["by_price_band"]
+    wb = max(bands, key=lambda r: r["rmse"][ref])
+    sb = min(bands, key=lambda r: r["rmse"][ref])
+    T.macro("WeakBand", tex_escape(wb["group"]))
+    T.macro("WeakBandRMSE", num(wb["rmse"][ref]))
+    T.macro("StrongBand", tex_escape(sb["group"]))
+    T.macro("StrongBandRMSE", num(sb["rmse"][ref]))
+    T.macro("BottomBandBias", f"${bands[0]['bias'][ref]:+.3f}$")
+    T.macro("TopBandBias", f"${bands[-1]['bias'][ref]:+.3f}$")
+    shrink = all(bands[0]["bias"][m] > 0 and bands[-1]["bias"][m] < 0 for m in reg_models)
+    T.macro("ShrinkSentence",
+            "Every model pulls the extremes towards the middle: cheap listings are over-priced "
+            "and luxury ones under-priced." if shrink else
+            "Not every model shows the same sign of bias at both ends of the price range.")
+    rc = E.get("district_rank_corr_mean")
+    if rc is None:
+        T.macro("DistrictRankCorr", "")
+    else:
+        word = "largely shared" if rc >= 0.5 else "only partly shared" if rc >= 0.2 else "not shared"
+        T.macro("DistrictRankCorr",
+                f"Which districts are hard is {word} across models (mean pairwise Spearman "
+                f"correlation of per-district RMSE {rc:.2f}), so "
+                + ("the weak spots lie mainly in the data, not in one model." if rc >= 0.5 else
+                   "part of the difficulty is model-specific."))
+    clf_ref = clf_models[-1]
+    wtd = max(named, key=lambda r: r["tier_err"][clf_ref])
+    wtb = max(bands, key=lambda r: r["tier_err"][clf_ref])
+    T.macro("WeakTierDistrict", tex_escape(wtd["group"]))
+    T.macro("WeakTierDistrictErr", pct(wtd["tier_err"][clf_ref]))
+    T.macro("WeakTierBand", tex_escape(wtb["group"]))
+    T.macro("WeakTierBandErr", pct(wtb["tier_err"][clf_ref]))
+    T.macro("ThresholdBandNote", ", the band that contains the tier threshold"
+            if wtb["group"] == E.get("threshold_band") else "")
+
+
 def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -625,6 +726,7 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
                   "WorstClusterMAE", "WorstClusterID", "BestClusterMAE"):
             T.macro(k, "--")
         T.table("tab_bonus", "(bonus experiments skipped)")
+    _explain(T, R)
     _verdicts(T, R)
     T.macro("RunMode", "fast smoke-test" if R["settings"]["fast"] else "full")
     T.flush()
