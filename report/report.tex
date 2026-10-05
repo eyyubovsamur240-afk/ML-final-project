@@ -944,7 +944,8 @@ sehriyarmemmedli, ``Bina.az sale project,'' Kaggle dataset.
   \includegraphics[width=\textwidth]{scaling_fit_time}
   \caption{Fit time vs.\ number of training listings (log--log), trees (a)
   and SVMs (b); $b$ is the fitted exponent of $t\approx a\,n^b$. Solid:
-  ours; dashed: scikit-learn.}
+  ours; dashed: scikit-learn. LIBLINEAR's time depends on how many dual
+  iterations it needs at each $C$, hence its uneven curve.}
   \label{fig:scaling}
 \end{figure}
 

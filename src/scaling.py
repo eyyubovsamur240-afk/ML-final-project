@@ -107,23 +107,29 @@ def scaling_study(D, s, tree_res, svm_res, fractions=None) -> dict:
     return out
 
 
+# colour per model family (ours solid, sklearn dashed in the same colour)
+_COLOUR = {"Ours: tree (A)": 0, "sklearn tree (A)": 0, "Ours: tree (B)": 1, "sklearn tree (B)": 1,
+           "Ours: Pegasos": 0, "sklearn SGDClassifier": 1, "sklearn LinearSVC": 2,
+           "Ours: RFF + Pegasos": 3, "sklearn SVC (RBF)": 3}
+
+
 def scaling_figure(res, out_dir):
-    fig, axes = plots._subplots(2, plots.FULL_W, 2.3)
+    """Log-log fit time; ours solid, sklearn dashed, same colour within a family."""
+    fig, axes = plots._subplots(2, plots.FULL_W, 2.9)
     groups = (("(a) Trees", lambda k: "tree" in k), ("(b) SVMs", lambda k: "tree" not in k))
     for ax, (title, keep) in zip(axes, groups):
-        i = 0
         for label, rec in res["models"].items():
             if not keep(label) or not rec["n"]:
                 continue
             ours = label.startswith("Ours")
+            fam = _COLOUR.get(label, 4)
             ax.plot(rec["n"], rec["fit_s"], marker="o" if ours else "s",
-                    linestyle="-" if ours else "--", color=plots.SERIES[i % len(plots.SERIES)],
+                    linestyle="-" if ours else "--", color=plots.SERIES[fam],
                     label=f"{label}  (b={rec['fit_exponent']:.2f})")
-            i += 1
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel("Training listings n")
-        ax.legend(loc="upper left")
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2)
         plots._panel_label(ax, title)
     axes[0].set_ylabel("Fit time (s)")
     return plots._save(fig, out_dir, "scaling_fit_time")
