@@ -36,3 +36,4 @@ report/generated/
 .DS_Store
 .idea/
 .vscode/
+models/

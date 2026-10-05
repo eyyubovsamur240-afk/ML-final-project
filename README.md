@@ -73,6 +73,7 @@ All three output folders are git-ignored: they are regenerated from a clean chec
 │   ├── plots.py              #   every figure
 │   ├── reporting.py          #   json / csv / LaTeX writers
 │   └── run_all.py            #   ONE command reproduces everything
+├── app/                      # web interface: serving model, FastAPI app, static page (see below)
 ├── tests/                    # pytest: models vs sklearn, metrics vs sklearn, parsing, splits, pipeline
 │   └── fake_binaaz.py        #   SYNTHETIC bina.az-shaped data for tests/CI only (never for results)
 ├── report/                   # IEEE two-column report (self-contained, no IEEEtran.cls)
@@ -117,6 +118,52 @@ t-weighted iterate averaging. The objective is recorded every epoch; ‖w‖, th
 support vectors (y f(x) ≤ 1) are reported. Non-linear extension: **random Fourier features**
 approximating the RBF kernel, followed by the same linear solver. Its objective is compared with
 LIBLINEAR's exact optimum.
+
+## Web interface
+
+A small web app lets anyone price a listing with our own models: the
+**random forest of our CART trees** for the price (test RMSE 0.180 on log
+price) and the **RFF Pegasos SVM** for premium vs standard (test ROC-AUC 0.974).
+
+![The price estimator](docs/interface.png)
+
+For each listing it shows the estimated price, an **80% range** calibrated on
+the held-out test split, the range the forest's individual **trees agree** on,
+the premium/standard tier with how reliable the SVM is at that distance from
+its margin, and **what drove the price**: the forest's prediction split exactly
+into one contribution per factor (tree-path decomposition).
+
+```bash
+pip install -r requirements-app.txt
+python -m app.train                     # once, ~6 min: writes models/predictor.pkl (git-ignored)
+uvicorn app.main:app --port 8000        # open http://localhost:8000  (API docs: /docs)
+```
+
+`python -m app.train --fast` builds a small demo bundle in seconds. Hyperparameters
+are the ones the full run selected on validation data; the bundle is fitted on
+train+val and scored once on test, so the numbers in "About the models" match the report.
+
+**Docker**
+
+```bash
+docker build -t binaaz-estimator .
+docker run -p 8000:8000 -v "$PWD/models:/app/models:ro" binaaz-estimator
+# or: docker compose up --build
+```
+
+The image holds the code only; the model bundle is mounted from `models/`.
+Behind a TLS-inspecting proxy, add `--secret id=pip_ca,src=/path/to/ca.crt` to the build.
+
+**API**: `POST /api/predict` takes a listing (`category`, `area_m2`, and any of `rooms`,
+`floor`, `total_floors`, `land_area_sot`, `location`, `lat`/`lng`, `repair`,
+`mortgage`, `bill_of_sale`, `description`); `GET /api/options` lists valid
+locations; `GET /api/model` is the model card; `GET /api/health` is for probes.
+Inputs are validated with the same domain rules as the cleaning step (422 on bad input).
+
+Code: `app/predictor.py` (serving model), `app/main.py` (FastAPI), `app/static/` (page),
+`tests/test_app.py`, CI in `.github/workflows/app.yml` (tests, then builds the image and
+queries the running container). Architecture diagram:
+[Eraser](https://app.eraser.io/workspace/4zDitvWlu68DfPiy4AyY).
 
 ---
 
