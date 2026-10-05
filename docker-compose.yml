@@ -1,0 +1,10 @@
+# docker compose up --build   ->  http://localhost:8000
+# Train first (once):  docker compose run --rm -v "$PWD/data:/app/data:ro" -v "$PWD/models:/app/models" web python -m app.train
+services:
+  web:
+    build: .
+    image: binaaz-estimator
+    ports: ["8000:8000"]
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped

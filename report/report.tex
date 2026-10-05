@@ -629,6 +629,75 @@ premium than one just below it.
   \fit{\gen{tab_worst}}
 \end{table}
 
+\subsection{Feature importance across models}
+MDI importances exist only for trees and are measured on training data.
+To compare every model on the same footing we use \emph{permutation
+importance} on the test split: shuffle one feature across rows, re-score
+the fitted model, and record how much worse it gets (Task~A: increase in
+RMSE of $\log$ price; Task~B: drop in ROC-AUC; mean of \PermRepeats{}
+shuffles). The \NFeatures{} design columns are grouped into \PermGroups{}
+raw features, so all one-hot columns of \texttt{district} or
+\texttt{location} are shuffled together and a categorical feature is not
+split across dozens of small columns; area and $\log$ area form one
+group because they carry the same information. No model is refitted.
+
+For Task~A (Fig.~\ref{fig:perm}, left), \ExplainRefModel{} relies most on
+\PermTopReg. \PermAgreeReg{} For Task~B (right) the RFF SVM relies most on
+\PermTopClf. \PermAgreeClf{} Two caveats apply. Correlated features
+(area and area per room; latitude, longitude and distance to the
+centre) can stand in for each other, so shuffling one of them
+understates how much the model needs the shared information. And the
+importance of a feature is a property of the model, not of the market:
+a feature a model ignores may still be predictive.
+
+\begin{figure*}[tp]
+  \centering
+  \includegraphics[width=\textwidth]{feature_importance_permutation}
+  \caption{Permutation importance on the test split, per raw feature
+  (one-hot columns grouped). Bars: mean over shuffles; whiskers: std.
+  Features are ranked by the forest (Task~A) and the RFF SVM (Task~B).}
+  \label{fig:perm}
+\end{figure*}
+
+\subsection{Where the models are weakest}
+Fig.~\ref{fig:breakdown} and Tables~\ref{tab:err-district}--\ref{tab:err-band}
+split the test error by named district (the \texttt{r.}\ tag on bina.az;
+districts with fewer than 30 test listings are pooled as ``other'') and
+by true price band. For \ExplainRefModel{} (overall RMSE
+\OverallRefRMSE), the weakest district is \WeakDistrict{} (RMSE
+\WeakDistrictRMSE{} on \WeakDistrictN{} listings) and the strongest is
+\StrongDistrict{} (\StrongDistrictRMSE). By price, the error is largest
+for \WeakBand{} AZN (\WeakBandRMSE) and smallest for \StrongBand{} AZN
+(\StrongBandRMSE). The mean residual of \ExplainRefModel{} is
+\BottomBandBias{} in the cheapest band and \TopBandBias{} in the most
+expensive one. \ShrinkSentence{} \DistrictRankCorr{} For Task~B the RFF
+SVM's error rate is highest in \WeakTierDistrict{} (\WeakTierDistrictErr)
+and in the \WeakTierBand{} AZN band (\WeakTierBandErr\ThresholdBandNote).
+
+\begin{figure*}[tp]
+  \centering
+  \includegraphics[width=\textwidth]{error_breakdown}
+  \caption{Task~A test RMSE of $\log(\text{price})$ by district and by
+  true price band, one marker per model (test rows in brackets).}
+  \label{fig:breakdown}
+\end{figure*}
+
+\begin{table}[t]
+  \centering
+  \caption{Test error by district. RMSE of $\log$ price for Task~A
+  models; tier error rate (err.) for Task~B models.}
+  \label{tab:err-district}
+  \fit{\gen{tab_error_district}}
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \caption{Test error by true price band (columns as in
+  Table~\ref{tab:err-district}).}
+  \label{tab:err-band}
+  \fit{\gen{tab_error_band}}
+\end{table}
+
 \subsection{Bonus: ridge, ensembles of our trees, clustering}
 \emph{Ridge} (normal equations, $\alpha=\RidgeAlpha$ chosen on
 validation) matches scikit-learn's \texttt{Ridge} to machine precision.

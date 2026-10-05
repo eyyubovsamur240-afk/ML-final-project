@@ -68,6 +68,7 @@ class Settings:
     cv_folds: int = config.CV_FOLDS
     n_boot: int = config.N_BOOT
     svc_max_train: int = 20_000
+    perm_repeats: int = 3
 
     @classmethod
     def make(cls, fast: bool, figures_dir) -> "Settings":
@@ -83,6 +84,7 @@ class Settings:
             s.forest_trees, s.boost_trees = f["forest_trees"], f["boost_trees"]
             s.cv_folds, s.n_boot = f["cv_folds"], f["n_boot"]
             s.svc_max_train = 3_000
+            s.perm_repeats = 1
         return s
 
 
@@ -791,6 +793,7 @@ def bonus_ensembles(data: Data, s: Settings, tree_res, fin) -> dict:
         curves={"rf": rf_curve, "gb": gb_curve}, times=times, figures=[fig],
         rf_importance_top=[(D.names[i], float(rf.feature_importances_[i]))
                            for i in np.argsort(rf.feature_importances_)[::-1][:8]],
+        _models={"Our random forest": ("X", rf), "Our gradient boosting": ("X", gb)},
     )
     ens_preds = {"reg::Ours: random forest": rf.predict(X1), "reg::sklearn RandomForest": skrf.predict(X1),
                  "reg::Ours: gradient boosting": gb.predict(X1), "reg::sklearn GradientBoosting": skgb.predict(X1),

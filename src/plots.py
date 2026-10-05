@@ -452,6 +452,47 @@ def misclassification_vs_distance(bins, err_rate, counts, out_dir):
     return _save(fig, out_dir, "error_tier_distance")
 
 
+def permutation_importance_bars(panels: dict, out_dir, top=10):
+    """panels: {title: ({model: {group: (mean, std)}}, reference model)}.
+    Groups are ranked by the reference model; every model is drawn per group."""
+    fig, axes = _subplots(len(panels), FULL_W, 0.24 * top + 0.9)
+    for ax, (title, (imp, ref)) in zip(np.atleast_1d(axes), panels.items()):
+        order = sorted(imp[ref], key=lambda g: -imp[ref][g][0])[:top][::-1]
+        models = list(imp)
+        h = 0.8 / len(models)
+        y = np.arange(len(order))
+        for i, m in enumerate(models):
+            vals = [imp[m][g][0] for g in order]
+            err = [imp[m][g][1] for g in order]
+            ax.barh(y + (i - (len(models) - 1) / 2) * h, vals, height=h * 0.9, xerr=err,
+                    color=SERIES[i], label=m, error_kw=dict(elinewidth=0.5, ecolor=INK_2, capsize=0))
+        ax.axvline(0, color=AXIS, linewidth=0.7)
+        ax.set_yticks(y, order)
+        ax.set_title(title)
+        ax.grid(axis="y", visible=False)
+        ax.legend(loc="lower right")
+    return _save(fig, out_dir, "feature_importance_permutation")
+
+
+def error_breakdown(by_district: list, by_band: list, models: list, out_dir):
+    """Task A test RMSE(log) per district and per price band, one marker per model."""
+    fig, axes = plt.subplots(1, 2, figsize=(FULL_W, 0.17 * max(len(by_district), len(by_band)) + 1.25),
+                             layout="constrained", gridspec_kw={"width_ratios": [1.35, 1]})
+    for ax, rows, title in ((axes[0], by_district, "By district"),
+                            (axes[1], by_band, "By true price (AZN)")):
+        y = np.arange(len(rows))
+        for i, m in enumerate(models):
+            ax.plot([r["rmse"][m] for r in rows], y, "o", color=SERIES[i], label=m,
+                    markersize=3.2)
+        ax.set_yticks(y, [f"{r['group']} ({r['n']:,})" for r in rows])
+        ax.invert_yaxis()
+        ax.set_xlabel("Test RMSE of log(price)")
+        ax.set_title(title)
+        ax.grid(axis="y", visible=False)
+    fig.legend(*axes[0].get_legend_handles_labels(), loc="outside lower center", ncol=len(models))
+    return _save(fig, out_dir, "error_breakdown")
+
+
 # =============================================================================
 # Bonus figures
 # =============================================================================
