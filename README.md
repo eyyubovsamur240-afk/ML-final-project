@@ -153,8 +153,9 @@ price) and the **RFF Pegasos SVM** for premium vs standard (test ROC-AUC 0.974).
 
 ![The price estimator](docs/interface.png)
 
-For each listing it shows the estimated price, an **80% range** calibrated on
-the held-out test split, the range the forest's individual **trees agree** on,
+For each listing it shows the estimated price, an **80% range** (split-conformal,
+calibrated on the forest's out-of-bag residuals, so its coverage on the untouched test
+split is a real check), the range the forest's individual **trees agree** on,
 the premium/standard tier with how reliable the SVM is at that distance from
 its margin, and **what drove the price**: the forest's prediction split exactly
 into one contribution per factor (tree-path decomposition).

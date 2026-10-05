@@ -12,8 +12,9 @@ by a person, using the project's own from-scratch models:
 Preprocessing is exactly the training pipeline (``make_features`` ->
 ``Preprocessor`` -> ``Standardizer``), fitted on train+val only. The test
 split is scored once at training time to give the interface honest numbers:
-held-out metrics, an empirical 80% price range, and how often the SVM is
-right inside vs outside its margin.
+held-out metrics, the coverage of the 80% price range (calibrated on the
+forest's out-of-bag residuals, not on test), and how often the SVM is right
+inside vs outside its margin.
 
 Nothing here learns from the user's input; ``predict`` is a pure function of
 the fitted bundle.
@@ -129,6 +130,43 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def oob_predict(forest: RandomForest, X: np.ndarray, y: np.ndarray, seed: int) -> np.ndarray:
+    """
+    Out-of-bag prediction for every training row: the mean over the trees
+    whose bootstrap sample left that row out (NaN if every tree saw it).
+
+    ``RandomForest`` does not store its bootstrap indices, so they are
+    replayed from its seeded RNG in the same order ``fit`` draws them. Each
+    replay is verified: a tree's root value is the mean target of its
+    bootstrap sample, so a mismatch means the replay went out of step.
+    """
+    rng = np.random.default_rng(seed)
+    n = len(y)
+    sums, counts = np.zeros(n), np.zeros(n)
+    for tree in forest.trees_:
+        idx = rng.integers(0, n, n)
+        rng.integers(2**31 - 1)                      # the tree's own seed, drawn next in fit()
+        if not np.isclose(tree.tree_value_[0], y[idx].mean()):
+            raise RuntimeError("bootstrap replay does not match RandomForest.fit")
+        out = np.ones(n, dtype=bool)
+        out[idx] = False
+        sums[out] += tree.predict(X[out])
+        counts[out] += 1
+    with np.errstate(invalid="ignore"):
+        return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
+
+
+def conformal_quantiles(resid: np.ndarray, coverage: float = 0.80) -> tuple[float, float]:
+    """Equal-tailed split-conformal band: residual quantiles at (1 -+ coverage)/2
+    with the (n+1)/n finite-sample correction, so new listings are covered
+    with probability >= ``coverage`` if they look like the calibration rows."""
+    n = len(resid)
+    a = (1.0 - coverage) / 2.0
+    hi_level = min(1.0, np.ceil((n + 1) * (1 - a)) / n)
+    lo_level = max(0.0, np.floor((n + 1) * a) / n)
+    return float(np.quantile(resid, lo_level)), float(np.quantile(resid, hi_level))
+
+
 def _strip_for_serving(model) -> None:
     """Drop the recursive Node objects and RNGs: ``predict`` only needs the
     flattened arrays, and this keeps the pickle small and shallow."""
@@ -174,17 +212,24 @@ class PricePredictor:
         t2 = time.perf_counter()
         log(f"  done in {t2 - t1:.0f}s. Scoring the held-out test split")
 
+        # --- 80% price range: split-conformal on OUT-OF-BAG residuals of the
+        # dev rows, so the test split stays untouched and its coverage below
+        # is a real check, not true by construction.
+        resid_oob = y_dev - oob_predict(self.forest_, X_dev, y_dev, seed)
+        resid_oob = resid_oob[np.isfinite(resid_oob)]
+        self.interval_ = conformal_quantiles(resid_oob, coverage=0.80)
+
         # --- honest numbers for the interface, from the untouched test split
         pred_te = self.forest_.predict(X_te)
         resid = y_te - pred_te
         score_te = self.svm_.decision_function(Z_te)
         tier_pred = (score_te >= 0).astype(int)
         inside = np.abs(score_te) < 1.0
-        self.interval_ = (float(np.quantile(resid, 0.10)), float(np.quantile(resid, 0.90)))
         self.metrics_ = {
             "regression": ev.regression_metrics(y_te, pred_te),
             "classification": ev.classification_metrics(tier_te, tier_pred, score_te),
             "interval_coverage": float(np.mean((resid >= self.interval_[0]) & (resid <= self.interval_[1]))),
+            "interval_calibration": f"out-of-bag residuals of {len(resid_oob):,} dev listings",
             "acc_inside_margin": float(np.mean(tier_pred[inside] == tier_te[inside])) if inside.any() else None,
             "acc_outside_margin": float(np.mean(tier_pred[~inside] == tier_te[~inside])) if (~inside).any() else None,
             "share_inside_margin": float(inside.mean()),
