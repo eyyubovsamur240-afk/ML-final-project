@@ -130,6 +130,14 @@ def _verdicts(T: TexWriter, R: dict) -> None:
     T.macro("SVMVsTreeWord", "outperforms" if max(lin, rff) > tclf + 0.005 else
             ("matches" if abs(max(lin, rff) - tclf) <= 0.005 else "trails"))
     sk_lin = clf["sklearn LinearSVC"]["metrics"]["f1"]
+    tm, sm = clf["Ours: decision tree"]["metrics"], clf["Ours: linear SVM (Pegasos)"]["metrics"]
+    if tm["f1"] > sm["f1"] and tm["roc_auc"] < sm["roc_auc"] - 0.02:
+        T.macro("AUCContrastSentence",
+                f"By ROC-AUC the order flips ({num(tm['roc_auc'])} for the tree against {num(sm['roc_auc'])} for the "
+                "SVM): the selected tree grows nearly pure leaves, so its probabilities are almost binary and rank "
+                "listings poorly, while SVM margins grade them smoothly.")
+    else:
+        T.macro("AUCContrastSentence", "")
     T.macro("PegasosVsLiblinearFOneDiff", num(abs(lin - sk_lin), 3))
     cc = R["tree"]["criterion_comparison"]
     g, e = cc["gini"]["val_f1"], cc["entropy"]["val_f1"]
@@ -204,6 +212,10 @@ def _verdicts(T: TexWriter, R: dict) -> None:
             and abs(a_["root_ours"][1] - a_["root_sk"][1]) < 1e-3:
         T.macro("RootSplitSentence", "Both trees choose the same root split ("
                 + tex_escape(f"{a_['root_ours'][0]} <= {a_['root_ours'][1]:.3f}") + ").")
+    elif a_["root_ours"] and a_["root_sk"] and a_.get("root_same_partition"):
+        T.macro("RootSplitSentence", "At the root both trees send the same rows left: ours splits on "
+                + tex_escape(f"{a_['root_ours'][0]} <= {a_['root_ours'][1]:.3f}") + ", scikit-learn on the equivalent "
+                + tex_escape(f"{a_['root_sk'][0]} <= {a_['root_sk'][1]:.3f}") + " (an exact tie between monotone transforms of the same feature).")
     elif a_["root_ours"] and a_["root_sk"]:
         T.macro("RootSplitSentence", "The root splits are " + tex_escape(f"{a_['root_ours'][0]} <= {a_['root_ours'][1]:.3f}")
                 + " (ours) and " + tex_escape(f"{a_['root_sk'][0]} <= {a_['root_sk'][1]:.3f}") + " (scikit-learn).")
@@ -293,6 +305,8 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
                                                      if k not in ("yeni tikili", "kohne tikili", "heyet evi/bag evi")))
             or "none")
     T.macro("CurrencyBreakdown", tex_escape(", ".join(f"{k} {v:,}" for k, v in cur.items())))
+    T.macro("CurrencySentence", "every price is already in AZN" if set(cur) <= {"AZN"} else
+            "prices come in several currencies (" + tex_escape(", ".join(f"{k} {v:,}" for k, v in cur.items())) + ")")
     st = eda["stats"]
     T.macro("PriceMedian", num(st["price_median"], 0))
     T.macro("PriceMean", num(st["price_mean"], 0))
@@ -362,7 +376,7 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
     # ---------------- svm studies
     b, rb = svm["best"], svm["best_rff"]
     T.macro("SVMLambda", sci(b["lambda_"]))
-    T.macro("SVMC", num(b["C"], 3 if b["C"] < 10 else 1))
+    T.macro("SVMC", f"{b['C']:.3g}")
     T.macro("SVMValFOne", num(b["val_f1"]))
     T.macro("SVMMarginVal", num(b["margin"]))
     T.macro("SVMSVFracVal", pct(b["sv_frac"]))
@@ -382,7 +396,7 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
     lam_rows = []
     for r in svm["sweep"]:
         mark = r is b or r["lambda_"] == b["lambda_"]
-        cells = [sci(r["lambda_"]), num(r["C"], 2 if r["C"] < 100 else 0), num(r["w_norm"], 2),
+        cells = [sci(r["lambda_"]), f"{r['C']:.3g}", num(r["w_norm"], 2),
                  num(r["margin"], 3), pct(r["sv_frac"]), num(r["train_f1"]), num(r["val_f1"]), num(r["val_auc"])]
         lam_rows.append([f"\\textbf{{{c}}}" if mark else c for c in cells])
     T.table("tab_svm_sweep", _tabular("@{}lrrrrrrr@{}",
