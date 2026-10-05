@@ -22,12 +22,12 @@ python3 -m venv .venv && source .venv/bin/activate      # Python 3.10–3.12 (te
 pip install -r requirements.txt
 
 # 1. get the data (not committed) — see data/README.md
-kaggle datasets download -d sehriyarmemmedli/binaaz-sale-project -p data --unzip
+kaggle datasets download -d sehriyarmemmedli/binaaz-sale-project -p data --unzip   # -> data/house_sale.csv
 
 # 2. sanity: unit tests (no dataset needed, ~5 s)
 python -m pytest -q
 
-# 3. reproduce everything (~10–15 min on a laptop; --fast for a 1-minute smoke run)
+# 3. reproduce everything (~30–40 min on a 4-core laptop; --fast for a 1-minute smoke run)
 python -m src.run_all
 
 # 4. build the report and slides (needs a LaTeX install: pdflatex)

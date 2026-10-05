@@ -41,24 +41,32 @@ DATA_PATH = config.DATA_PATH
 # (price per m², price restated). They are dropped before anything else.
 LEAKAGE_COLUMNS: list[str] = ["unit_price", "total_price"]
 
-# Identifiers / personal data / free-form address: no predictive meaning we
-# are allowed to use, and they would let a model memorise individual sellers.
+# Identifiers / personal data / free-form address / seller identity: no
+# predictive meaning we are allowed to use, and they would let a model
+# memorise individual sellers. (Any column named like *_id, *url*, img_* is
+# treated the same way, see ``_is_identifier``.)
 IDENTIFIER_COLUMNS: list[str] = [
     "id", "item_id", "url", "link", "owner_name", "owner_title", "owner",
     "shop_name", "shop_title", "shop", "address", "phone", "contact",
 ]
 
-# Listing-promotion metadata: describes the seller's ad budget, not the
-# property, and its meaning changes with bina.az pricing policy.
+# Listing-promotion and scrape bookkeeping: describes the seller's ad budget
+# or the scraper, not the property.
 LISTING_META_COLUMNS: list[str] = [
-    "vip", "featured", "products_label", "extra_info", "updated", "created",
-    "date", "views",
+    "vip", "featured", "products_label", "updated", "created", "date", "views",
+    "city_when", "day_x", "day_y", "hour_x", "hour_y", "datetime_scrape_y", "currency_y",
 ]
 
-# Canonical (English) name -> accepted spellings after ``normalize_name``.
+# Canonical (English) name -> accepted spellings after ``normalize_name``,
+# in PRIORITY order: when a dump has two versions of a field (bina.az has
+# both `repair`="Təmirli"/blank and `Təmir`="var"/"yoxdur"), the first
+# spelling that exists wins.
 COLUMN_ALIASES: dict[str, list[str]] = {
     "price": ["price", "qiymet"],
-    "currency": ["currency", "valyuta"],
+    "currency": ["currency", "currency_x", "valyuta"],
+    "listing_key": ["estate_rel_url_x", "estate_rel_url", "item_url", "item_id", "listing_id"],
+    "scraped_at": ["datetime_scrape_x", "datetime_scrape", "scraped_at"],
+    "extra_info": ["extra_info"],
     "area_raw": ["sahe", "area", "area_m2", "sahe_m2"],
     "rooms_raw": ["otaq_sayi", "rooms", "room_count", "otaq"],
     "floor_raw": ["mertebe", "floor"],
@@ -86,7 +94,7 @@ BINARY_FEATURES = [
     "repair", "mortgage", "bill_of_sale",
     "kw_metro", "kw_sea", "kw_furnished", "kw_urgent", "kw_euro_reno", "kw_parking",
 ]
-CATEGORICAL_FEATURES = ["category", "building_type", "city", "location"]
+CATEGORICAL_FEATURES = ["category", "building_type", "city", "district", "location"]
 # Missing-indicator columns are added only for these base features (derived
 # columns such as floor_ratio are missing exactly when their base is).
 INDICATOR_FEATURES = ["rooms", "floor", "total_floors", "lat", "repair"]
@@ -187,16 +195,22 @@ _NO = {"yox", "yoxdur", "xeyr", "no", "false", "0", "нет"}
 
 
 def parse_yes_no(value) -> float:
-    """'var' -> 1, 'yoxdur' -> 0, missing/unknown -> nan."""
+    """
+    'var' / 'Çıxarış var' / 'Təmirli' -> 1;  'yoxdur' / 'Təmirsiz' -> 0;
+    missing or unknown -> nan.
+    """
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return np.nan
     if isinstance(value, (bool, np.bool_)):
         return float(value)
     s = transliterate(value).strip()
-    if s in _YES:
-        return 1.0
-    if s in _NO:
+    if not s:
+        return np.nan
+    tokens = s.replace(",", " ").split()
+    if s in _NO or any(t in _NO for t in tokens) or s.endswith(("siz", "suz", "sız")):
         return 0.0
+    if s in _YES or any(t in _YES for t in tokens) or s.endswith(("li", "lu")):
+        return 1.0
     return np.nan
 
 
@@ -297,8 +311,9 @@ def canonicalize_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     norm = {c: normalize_name(c) for c in df.columns}
     rename = {}
     for canon, aliases in COLUMN_ALIASES.items():
-        for raw, n in norm.items():
-            if n in aliases and raw not in rename:
+        for alias in aliases:                       # priority order
+            raw = next((r for r, n in norm.items() if n == alias and r not in rename), None)
+            if raw is not None:
                 rename[raw] = canon
                 break
     out = df.rename(columns=rename)
@@ -333,6 +348,24 @@ def _is_price_derived(col: str) -> bool:
     return col != "price" and ("price" in col or "qiymet" in col)
 
 
+def _is_identifier(col: str) -> bool:
+    return (col in IDENTIFIER_COLUMNS or col.startswith(("img", "estate_details"))
+            or "url" in col or re.search(r"(^|_)id(_[a-z])?$", col) is not None
+            or col == "estate_id")
+
+
+def extract_district(extra_info, location) -> str | float:
+    """District ('... r.') from bina.az's location tags, e.g.
+    'Qara Qarayev m.* Nizami r.* 8-ci kilometr q.' -> 'nizami r.'."""
+    for text in (extra_info, location):
+        if isinstance(text, str):
+            for tok in text.split("*"):
+                tok = tok.strip()
+                if tok.endswith(" r."):
+                    return transliterate(tok)
+    return np.nan
+
+
 def clean(df: pd.DataFrame, log: CleaningLog | None = None) -> pd.DataFrame:
     """
     Clean the raw frame (row-wise rules only — nothing is learned here):
@@ -352,10 +385,19 @@ def clean(df: pd.DataFrame, log: CleaningLog | None = None) -> pd.DataFrame:
     if "price" not in df.columns:
         raise KeyError(f"No price column found. Columns: {list(df.columns)}")
 
+    # --- 0. repeated scrapes of the same listing: keep the most recent one ------
+    if "listing_key" in df.columns:
+        if "scraped_at" in df.columns:
+            log.notes["scrape_period"] = (str(df["scraped_at"].min())[:10], str(df["scraped_at"].max())[:10])
+            df = df.sort_values("scraped_at", kind="stable")
+        df = df.drop_duplicates(subset="listing_key", keep="last")
+        log.add("repeat scrapes of a listing removed (latest kept)", len(df))
+
     # --- 1. leakage / identifiers / meta --------------------------------------
     leak = [c for c in df.columns if c in LEAKAGE_COLUMNS or _is_price_derived(c)]
-    ids = [c for c in df.columns if c in IDENTIFIER_COLUMNS]
-    meta = [c for c in df.columns if c in LISTING_META_COLUMNS]
+    ids = [c for c in df.columns if c not in leak and c not in COLUMN_ALIASES and _is_identifier(c)]
+    ids += [c for c in ("listing_key",) if c in df.columns]
+    meta = [c for c in df.columns if c in LISTING_META_COLUMNS or c == "scraped_at"]
     log.dropped_columns = {"leakage": leak, "identifiers": ids, "listing_meta": meta}
     df = df.drop(columns=leak + ids + meta)
 
@@ -388,12 +430,21 @@ def clean(df: pd.DataFrame, log: CleaningLog | None = None) -> pd.DataFrame:
     for c in ("category", "building_type", "city", "location"):
         if c in df:
             s = df[c].astype("string").str.strip().str.replace(r"\s+", " ", regex=True)
+            s = s.str.replace(r"\s*/\s*", "/", regex=True)        # "evi / Bağ" == "evi/Bağ"
             out[c] = s.map(lambda v: transliterate(v).strip() if isinstance(v, str) and v else np.nan)
         else:
             out[c] = np.nan
+    extra = df["extra_info"] if "extra_info" in df else pd.Series([None] * len(df), index=df.index)
+    loc_raw = df["location"] if "location" in df else pd.Series([None] * len(df), index=df.index)
+    out["district"] = [extract_district(e, l) for e, l in zip(extra, loc_raw)]
     out["description"] = df["description"].fillna("") if "description" in df else ""
 
-    # --- 3. target & core feature must exist -----------------------------------
+    # --- 3. scope, target & core feature must exist ------------------------------
+    if config.KEEP_CATEGORIES is not None and out["category"].notna().any():
+        keep = {normalize_name(c) for c in config.KEEP_CATEGORIES}
+        log.notes["category_counts_before_scope"] = out["category"].value_counts().to_dict()
+        out = out[out["category"].map(lambda c: isinstance(c, str) and normalize_name(c) in keep)]
+        log.add("residential categories only", len(out))
     out = out[out["price_azn"].notna() & (out["price_azn"] > 0)]
     log.add("has a positive price", len(out))
     out = out[out["area_m2"].notna() & (out["area_m2"] > 0)]
@@ -403,6 +454,7 @@ def clean(df: pd.DataFrame, log: CleaningLog | None = None) -> pd.DataFrame:
     out = out.drop_duplicates()
     log.add("exact duplicates removed", len(out))
     key = ["price_azn", "area_m2", "rooms", "floor", "total_floors", "lat", "lng", "category"]
+    # (same flat posted again under a new listing id)
     out = out.drop_duplicates(subset=key)
     log.add("re-posted listings removed", len(out))
 

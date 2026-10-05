@@ -27,6 +27,8 @@ DISTRICTS = {   # name: (lat, lng, price multiplier)
     "Qaradağ r.": (40.250, 49.600, 0.55), "28 May m.": (40.380, 49.850, 1.7),
     "Gənclik m.": (40.400, 49.850, 1.5), "Badamdar q.": (40.340, 49.800, 1.3),
 }
+# metro stations / settlements -> their administrative district (as in extra_info)
+PARENT_DISTRICT = {"28 May m.": "Nəsimi r.", "Gənclik m.": "Nərimanov r.", "Badamdar q.": "Səbail r."}
 CITIES = {"Bakı": 0.86, "Sumqayıt": 0.06, "Gəncə": 0.04, "Xırdalan": 0.04}
 CITY_CENTRES = {"Sumqayıt": (40.59, 49.67), "Gəncə": (40.68, 46.36), "Xırdalan": (40.45, 49.75)}
 CATEGORIES = {"Yeni tikili": 0.45, "Köhnə tikili": 0.30, "Həyət evi / Bağ evi": 0.18,
@@ -79,7 +81,10 @@ def make_fake_binaaz(n: int = 6000, seed: int = 0) -> pd.DataFrame:
         "currency": np.where(usd, "USD", "AZN"),
         "unit_price": [f"{int(u):,} AZN/m²".replace(",", " ") for u in price / area],
         "total_price": price,
+        "estate_rel_url_x": [f"/items/{i}" for i in range(n)],
+        "datetime_scrape_x": ["2024-10-05 10:00:00"] * n,
         "location": dist,
+        "extra_info": [f"{d}* {PARENT_DISTRICT.get(d, d if d.endswith(' r.') else 'Xətai r.')}" for d in dist],
         "city": city,
         "Kateqoriya": cat,
         "Binanın növü": np.where(cat == "Yeni tikili", "Yeni tikili",
@@ -88,6 +93,7 @@ def make_fake_binaaz(n: int = 6000, seed: int = 0) -> pd.DataFrame:
         "Otaq sayı": rooms.astype(str),
         "Mərtəbə": [f"{f} / {t}" for f, t in zip(floor, total_floors)],
         "Torpaq sahəsi": [f"{x:g} sot" if not np.isnan(x) else None for x in land],
+        "repair": np.where(repair, "Təmirli", None),          # duplicate field, as in the dump
         "Təmir": np.where(repair, "var", "yoxdur"),
         "İpoteka": np.where(mortgage, "var", None),
         "Çıxarış": np.where(bill, "var", None),
@@ -106,8 +112,17 @@ def make_fake_binaaz(n: int = 6000, seed: int = 0) -> pd.DataFrame:
     df.loc[(miss > 0.075) & (miss < 0.08), "price"] = "1"              # placeholder price
     df.loc[(miss > 0.08) & (miss < 0.085), "Sahə"] = "8500 m²"          # typo
     df.loc[(miss > 0.085) & (miss < 0.09), "Mərtəbə"] = "12 / 5"        # floor > total
-    dupes = df.sample(frac=0.05, random_state=seed)
-    return pd.concat([df, dupes], ignore_index=True).sample(frac=1.0, random_state=seed)
+    dupes = df.sample(frac=0.05, random_state=seed)                   # exact duplicates
+    rescrape = df.sample(frac=0.10, random_state=seed + 1).copy()     # same listing scraped later,
+    rescrape["datetime_scrape_x"] = "2024-11-01 10:00:00"             # sometimes with a new price
+    bump = rescrape.sample(frac=0.3, random_state=seed).index
+    rescrape.loc[bump, "price"] = rescrape.loc[bump, "price"].map(
+        lambda p: p if p in (None, "1") or pd.isna(p) else f"{int(p.replace(' ', '')) + 1000:,}".replace(",", " "))
+    land = df.sample(frac=0.03, random_state=seed + 2).copy()          # out-of-scope category
+    land["Kateqoriya"] = "Torpaq"
+    land["estate_rel_url_x"] = [f"/items/land{i}" for i in range(len(land))]
+    out = pd.concat([df, dupes, rescrape, land], ignore_index=True)
+    return out.sample(frac=1.0, random_state=seed)
 
 
 if __name__ == "__main__":

@@ -262,6 +262,16 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
     T.macro("MetaCols", tex_escape(", ".join(data["dropped_columns"].get("listing_meta", [])) or "none found"))
     cur = data["currency_counts"]
     T.macro("NonAZNListings", num(int(sum(v for k, v in cur.items() if k != "AZN"))))
+    steps_d = dict((name, n) for name, n in data["cleaning_steps"])
+    T.macro("NUniqueListings", num(steps_d.get("repeat scrapes of a listing removed (latest kept)", data["n_raw"])))
+    T.macro("NResidential", num(steps_d.get("residential categories only", data["n_raw"])))
+    sp = data.get("scrape_period") or ["--", "--"]
+    T.macro("ScrapeStart", tex_escape(sp[0]))
+    T.macro("ScrapeEnd", tex_escape(sp[1]))
+    cbs = data.get("category_counts_before_scope") or {}
+    T.macro("ScopeDroppedCats", tex_escape(", ".join(f"{k} {v:,}" for k, v in cbs.items()
+                                                     if k not in ("yeni tikili", "kohne tikili", "heyet evi/bag evi")))
+            or "none")
     T.macro("CurrencyBreakdown", tex_escape(", ".join(f"{k} {v:,}" for k, v in cur.items())))
     st = eda["stats"]
     T.macro("PriceMedian", num(st["price_median"], 0))

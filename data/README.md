@@ -15,20 +15,23 @@ pip install kaggle
 kaggle datasets download -d sehriyarmemmedli/binaaz-sale-project -p data --unzip
 ```
 or download the archive in the browser and extract it so the CSV lives
-**directly in this folder**, e.g. `data/bina_az_sale.csv`.
+**directly in this folder**: `data/house_sale.csv` (the file inside the archive).
 
 The loader (`src/data_prep.py::find_data_file`) uses `config.DATA_PATH`
-(`data/bina_az_sale.csv`) if it exists, otherwise **the only `*.csv` in `data/`**.
+(`data/house_sale.csv`) if it exists, otherwise **the only `*.csv` in `data/`**.
 If you have several CSVs, either set `DATA_PATH` once in `src/config.py` or run
 `python -m src.run_all --data data/<file>.csv`.
 
-## Provenance (fill in once)
+## Provenance (the copy our results were produced from)
 | Field | Value |
 |-------|-------|
-| Downloaded on | YYYY-MM-DD |
-| Kaggle version | vN |
-| File name | … |
-| SHA-256 | printed by `run_all` into `results/metrics.json` → `data.sha256` |
+| Downloaded on | 2026-10-05 (Kaggle API, `sehriyarmemmedli/binaaz-sale-project`) |
+| File name | `house_sale.csv` (141.9 MB, 100,775 rows, 51 columns) |
+| Scrape period | 2024-10-05 → 2024-11-19 |
+| SHA-256 | `b6a4c67e0d3c712de31b9db53db53688792bc03099a213c1994c43114758aec2` |
+
+`run_all` re-computes the hash into `results/metrics.json` → `data.sha256`; if yours differs,
+the Kaggle file has changed and numbers may differ slightly from the report.
 
 ## Notes / gotchas handled by the code
 - Column names are **Azerbaijani** (`Sahə`, `Otaq sayı`, `Mərtəbə`, `Torpaq sahəsi`,
@@ -40,4 +43,9 @@ If you have several CSVs, either set `DATA_PATH` once in `src/config.py` or run
 - **Leakage:** `unit_price`, `total_price` and any other column whose name contains `price` are dropped
   (`data_prep.LEAKAGE_COLUMNS`); identifiers/addresses and promotion flags are dropped too.
   The exact list is printed in `results/metrics.json` → `data.dropped_columns` and in the report.
-- Prices in USD/EUR are converted to AZN with the fixed rates in `config.TO_AZN`.
+- Prices in USD/EUR are converted to AZN with the fixed rates in `config.TO_AZN`
+  (in this copy every listing is already in AZN).
+- The scraper visited many listings several times (100,775 rows, 64,454 distinct listing URLs);
+  the cleaner keeps the latest scrape of each listing.
+- Only residential categories are kept (`config.KEEP_CATEGORIES`); set it to `None` to keep land,
+  commercial objects, offices and garages too.

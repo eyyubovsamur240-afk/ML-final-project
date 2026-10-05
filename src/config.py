@@ -15,7 +15,7 @@ SEED = 42
 # --- Paths --------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
-DATA_PATH = DATA_DIR / "bina_az_sale.csv"      # change if your filename differs
+DATA_PATH = DATA_DIR / "house_sale.csv"         # file name inside the Kaggle archive
 RESULTS_DIR = ROOT / "results"                  # json/csv outputs (git-ignored)
 FIGURES_DIR = ROOT / "report" / "figures"       # every figure (git-ignored)
 GENERATED_TEX_DIR = ROOT / "report" / "generated"  # tables/macros for LaTeX
@@ -25,6 +25,12 @@ GENERATED_TEX_DIR = ROOT / "report" / "generated"  # tables/macros for LaTeX
 # Central Bank of Azerbaijan since 2017; EUR uses an approximate 2025-26 rate.
 # Rates are constants (not estimated from the data) so they cannot leak.
 TO_AZN = {"AZN": 1.0, "USD": 1.70, "EUR": 1.97, "RUB": 0.02}
+
+# --- Scope ----------------------------------------------------------------------
+# Residential listings only. Land plots ("Torpaq": area in sot, no rooms/floors),
+# commercial objects, offices and garages are different markets with different
+# price drivers. Set to None to keep every category.
+KEEP_CATEGORIES = ["Yeni tikili", "Köhnə tikili", "Həyət evi/Bağ evi"]
 
 # --- Cleaning rules (fixed domain rules, documented in the report) ------------
 PRICE_RANGE_AZN = (5_000, 15_000_000)     # outside: data-entry error / not a sale
@@ -64,9 +70,9 @@ RFF_COMPONENT_GRID = [32, 64, 128, 256, 512, 1024, 2048]
 
 RIDGE_ALPHAS = [1e-3, 1e-2, 1e-1, 1, 10, 100, 1000]
 
-FOREST_TREES = 60
-BOOST_TREES = 200
-BOOST_LR = 0.1
+FOREST_TREES = 40
+BOOST_TREES = 120
+BOOST_LR = 0.15
 BOOST_DEPTH = 4
 
 KMEANS_K_GRID = list(range(2, 21))

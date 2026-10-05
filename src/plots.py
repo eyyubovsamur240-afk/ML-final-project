@@ -140,12 +140,10 @@ def price_by_rooms(rooms, price, out_dir):
                     boxprops=dict(linewidth=0))
     for patch in bp["boxes"]:
         patch.set_facecolor(BLUE_RAMP[2])
-    ax.set_xticks(range(1, len(keys) + 1), [f"{k}" if k < 6 else "6+" for k in keys])
-    ax.set_xlabel("Rooms")
+    ax.set_xticks(range(1, len(keys) + 1),
+                  [f"{k if k < 6 else '6+'}\n({np.sum(r == k):,})" for k in keys])
+    ax.set_xlabel("Rooms (listings)")
     ax.set_ylabel("log(price in AZN)")
-    for i, k in enumerate(keys, start=1):
-        ax.text(i, ax.get_ylim()[0], f"n={np.sum(r == k):,}", ha="center", va="bottom",
-                fontsize=5.8, color=INK_2)
     return _save(fig, out_dir, "eda_price_by_rooms")
 
 
@@ -157,7 +155,7 @@ def price_map(lat, lng, price, out_dir, name="eda_price_map"):
     sc = ax.scatter(lng[order], lat[order], c=logp[order], s=1.2, cmap=SEQ, linewidths=0,
                     vmin=np.quantile(logp, 0.02), vmax=np.quantile(logp, 0.98), rasterized=True)
     _map_axes(ax)
-    ax.set_title(f"Baku / Absheron ({share:.0%} of geo-tagged listings)")
+    ax.set_title(f"Baku area ({share:.0%} of listings)")
     cb = fig.colorbar(sc, ax=ax, shrink=0.85)
     cb.set_label("log(price)")
     cb.outline.set_visible(False)
@@ -437,7 +435,7 @@ def residual_map(lat, lng, resid, out_dir):
     sc = ax.scatter(lng[order], lat[order], c=r[order], s=2.5, cmap=DIV, linewidths=0,
                     norm=TwoSlopeNorm(0, -lim, lim), rasterized=True)
     _map_axes(ax)
-    ax.set_title(f"Test residuals, Baku / Absheron ({share:.0%} of test)")
+    ax.set_title(f"Test residuals, Baku area ({share:.0%})")
     cb = fig.colorbar(sc, ax=ax, shrink=0.85)
     cb.set_label("Residual, log (red = over)")
     cb.outline.set_visible(False)
