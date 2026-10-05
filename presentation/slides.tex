@@ -58,7 +58,7 @@
     \column{0.52\textwidth}
     \begin{itemize}\small
       \item Azerbaijani column names $\to$ English; strings like ``85 m$^2$'', ``5 / 9'', ``1 250 000'' parsed
-      \item Prices converted to AZN at fixed rates (USD peg 1.70)
+      \item Repeated scrapes: \NRaw{} rows but \NUniqueListings{} listings (latest kept); residential only
       \item Duplicates and re-posts removed; fixed plausibility rules
       \item \textbf{Leakage dropped:} \LeakageCols{} (both functions of price), plus identifiers and promo flags
       \item Imputation, one-hot levels, scaling and the tier threshold are fitted on \textbf{train only}
@@ -132,7 +132,8 @@
   \vspace{0.6em}
   \begin{itemize}\small
     \item Our tree vs.\ sklearn: \RegGainMismatch{} gain mismatches, \RegAgreement{} test agreement (differences: \TreeGapCause)
-    \item Averaged Pegasos within \PegasosVsLiblinearFOneDiff{} F1 of LIBLINEAR; RFF \RFFVsLinearWord{} the linear SVM (\RFFMinusLinear{} F1)
+    \item Averaged Pegasos F1 \OurSVMFOne{} vs LIBLINEAR \SkLinSVCFOne{} (same objective); RFF \RFFVsLinearWord{} the linear SVM (\RFFMinusLinear{} F1)
+    \item Tree wins on F1 but its near-pure leaves give poor ranking: AUC \OurTreeClfAUC{} vs SVM \OurSVMAUC
   \end{itemize}
 \end{frame}
 

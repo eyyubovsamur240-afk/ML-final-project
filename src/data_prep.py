@@ -192,6 +192,9 @@ def parse_area_m2(value) -> float:
 
 _YES = {"var", "beli", "he", "yes", "true", "1", "movcuddur", "bəli", "есть", "да"}
 _NO = {"yox", "yoxdur", "xeyr", "no", "false", "0", "нет"}
+# '-li'/'-lu' means "with" only on the words these fields actually use; any
+# other word ending in li/lu (a district, a name) is not a yes.
+_YES_STEMS = ("temir", "cixaris", "kupca", "ipoteka", "ipotek")
 
 
 def parse_yes_no(value) -> float:
@@ -209,7 +212,8 @@ def parse_yes_no(value) -> float:
     tokens = s.replace(",", " ").split()
     if s in _NO or any(t in _NO for t in tokens) or s.endswith(("siz", "suz", "sız")):
         return 0.0
-    if s in _YES or any(t in _YES for t in tokens) or s.endswith(("li", "lu")):
+    if s in _YES or any(t in _YES or (t.endswith(("li", "lu")) and t[:-2] in _YES_STEMS)
+                        for t in tokens):
         return 1.0
     return np.nan
 
@@ -390,7 +394,10 @@ def clean(df: pd.DataFrame, log: CleaningLog | None = None) -> pd.DataFrame:
         if "scraped_at" in df.columns:
             log.notes["scrape_period"] = (str(df["scraped_at"].min())[:10], str(df["scraped_at"].max())[:10])
             df = df.sort_values("scraped_at", kind="stable")
-        df = df.drop_duplicates(subset="listing_key", keep="last")
+        # rows with no key are not one listing, so only keyed rows are de-duplicated
+        key = df["listing_key"].astype("string").str.strip()
+        has_key = key.notna() & (key != "")
+        df = df[~(has_key & key.duplicated(keep="last"))]
         log.add("repeat scrapes of a listing removed (latest kept)", len(df))
 
     # --- 1. leakage / identifiers / meta --------------------------------------

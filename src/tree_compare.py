@@ -26,7 +26,9 @@ def compare_tree_structure(ours, sk, X, y) -> dict:
       tie_divergence     different partition with EQUAL gain (a tie) -> stop
       float32_divergence different gain, but sklearn's split is exactly the best split
                          our own search finds on the float32-rounded node data (distinct
-                         float64 values merged by sklearn's cast) -> stop
+                         float64 values merged by sklearn's cast) -> stop; also a node
+                         we split but sklearn cannot, because in float32 no valid
+                         split is left
       gain_mismatch      different gain that float32 does NOT explain -> stop
                          (this is the number that must be 0 for a correct tree)
       decision_mismatch  one tree splits, the other makes a leaf
@@ -62,7 +64,12 @@ def compare_tree_structure(ours, sk, X, y) -> dict:
         stats["nodes_compared"] += 1
         sk_leaf = t.children_left[sid] == -1
         if node.is_leaf() or sk_leaf:
-            stats["leaves_matched" if node.is_leaf() == sk_leaf else "decision_mismatch"] += 1
+            if node.is_leaf() == sk_leaf:
+                stats["leaves_matched"] += 1
+            elif sk_leaf and ours._best_split(X32[idx], y[idx]) is None:
+                stats["float32_divergence"] += 1     # values identical once cast to float32
+            else:
+                stats["decision_mismatch"] += 1
             continue
         lo = X[idx, node.feature] <= node.threshold
         ls = X32[idx, t.feature[sid]] <= float(t.threshold[sid])
