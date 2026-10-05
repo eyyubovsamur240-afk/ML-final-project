@@ -158,6 +158,26 @@ def _verdicts(T: TexWriter, R: dict) -> None:
     quarter = auc_[D_ <= D_.max() / 4]
     sat = len(quarter) and (auc_.max() - quarter.max()) < 0.005
     T.macro("RFFDVerdict", "saturates well before the largest $D$" if sat else "keeps improving up to the largest $D$")
+    grid = R["svm"]["rff_grid"]
+    g_vals = sorted({r["gamma"] for r in grid})
+    l_vals = sorted({r["lambda_"] for r in grid})
+    br = R["svm"]["best_rff"]
+    edges = []
+    if br["gamma"] == g_vals[0]:
+        edges.append("the smallest bandwidth $\\gamma$")
+    elif br["gamma"] == g_vals[-1]:
+        edges.append("the largest bandwidth $\\gamma$")
+    if br["lambda_"] == l_vals[0]:
+        edges.append("the weakest regularisation $\\lambda$")
+    elif br["lambda_"] == l_vals[-1]:
+        edges.append("the strongest regularisation $\\lambda$")
+    if edges:
+        note = ("Validation picks " + " and ".join(edges) + " in the grid"
+                + (": the RBF kernel prefers to be nearly linear on these features, so the extension adds little over the linear SVM."
+                   if br["gamma"] == g_vals[0] else ", so the optimum may lie just outside it."))
+    else:
+        note = "Both selected values lie inside the grid."
+    T.macro("RFFGridNote", note)
     dr = R["analysis"]["decile_residuals"]["Our tree"]
     T.macro("TopDecileWord", "under-predicts" if dr[-1] < 0 else "over-predicts")
     T.macro("BottomDecileWord", "over-predicts" if dr[0] > 0 else "under-predicts")
@@ -262,6 +282,16 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
     T.macro("MetaCols", tex_escape(", ".join(data["dropped_columns"].get("listing_meta", [])) or "none found"))
     cur = data["currency_counts"]
     T.macro("NonAZNListings", num(int(sum(v for k, v in cur.items() if k != "AZN"))))
+    steps_d = dict((name, n) for name, n in data["cleaning_steps"])
+    T.macro("NUniqueListings", num(steps_d.get("repeat scrapes of a listing removed (latest kept)", data["n_raw"])))
+    T.macro("NResidential", num(steps_d.get("residential categories only", data["n_raw"])))
+    sp = data.get("scrape_period") or ["--", "--"]
+    T.macro("ScrapeStart", tex_escape(sp[0]))
+    T.macro("ScrapeEnd", tex_escape(sp[1]))
+    cbs = data.get("category_counts_before_scope") or {}
+    T.macro("ScopeDroppedCats", tex_escape(", ".join(f"{k} {v:,}" for k, v in cbs.items()
+                                                     if k not in ("yeni tikili", "kohne tikili", "heyet evi/bag evi")))
+            or "none")
     T.macro("CurrencyBreakdown", tex_escape(", ".join(f"{k} {v:,}" for k, v in cur.items())))
     st = eda["stats"]
     T.macro("PriceMedian", num(st["price_median"], 0))

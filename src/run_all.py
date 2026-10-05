@@ -87,6 +87,8 @@ def main(argv=None) -> dict:
         "column_mapping": data.log.notes.get("column_mapping", {}),
         "currency_counts": data.log.notes.get("currency_counts", {}),
         "missing_after_cleaning": data.log.notes.get("missing_after_cleaning", {}),
+        "scrape_period": data.log.notes.get("scrape_period"),
+        "category_counts_before_scope": data.log.notes.get("category_counts_before_scope", {}),
         "tier_threshold_train": thr,
         "premium_share": {"train": float(tier_tr.mean()),
                           "val": float(dp.make_tier_label(data.price[data.va], thr)[0].mean()),

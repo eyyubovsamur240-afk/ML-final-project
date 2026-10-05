@@ -147,27 +147,35 @@ and a linear solver on $\phi$ approximates an RBF-kernel SVM.
 \section{Data and Preprocessing}
 \subsection{Dataset and cleaning}
 We use the Kaggle \emph{Bina.az sale project} dump~\cite{data} (file
-\texttt{\DataFile}, SHA-256 prefix \texttt{\DataSHA}), \NRaw{} rows. Column
-names are Azerbaijani (\emph{Sah\schwa{}}, \emph{Otaq say\i},
-\emph{M\schwa{}rt\schwa{}b\schwa{}}, \ldots), most numbers arrive as
-strings with units (``85~m$^2$'', ``5 / 9'', ``1~250~000'') and prices are
-quoted in several currencies (\CurrencyBreakdown). All cleaning lives in
-\texttt{src/data\_prep.py}:
+\texttt{\DataFile}, SHA-256 prefix \texttt{\DataSHA}): \NRaw{} rows scraped
+between \ScrapeStart{} and \ScrapeEnd. Column names are Azerbaijani
+(\emph{Sah\schwa{}}, \emph{Otaq say\i}, \emph{M\schwa{}rt\schwa{}b\schwa{}},
+\ldots), most numbers arrive as strings with units (``145~m$^2$'', ``7 / 9'',
+``2~640 AZN/m$^2$'') and every price carries a currency field
+(\CurrencyBreakdown). All cleaning lives in \texttt{src/data\_prep.py}:
 \begin{enumerate}\setlength\itemsep{0pt}
-  \item names are transliterated and mapped to English
-        (\emph{area, rooms, floor, land area, repair, mortgage, bill of sale,
-        category, building type});
+  \item names are transliterated and mapped to English (\emph{area, rooms,
+        floor, land area, repair, mortgage, bill of sale, category}); where the
+        dump holds two versions of a field (repair as ``T\schwa{}mirli''/blank and
+        as \emph{var}/\emph{yoxdur}) the complete one is used;
   \item tolerant parsers handle thousands separators, decimal commas,
-        ``floor / total floors'', land in \emph{sot}/m$^2$/ha and
-        \emph{var}/\emph{yoxdur} flags; prices are converted to AZN at fixed
-        rates (USD at the official 1.70 peg);
+        ``floor / total floors'', land in \emph{sot}/m$^2$/ha and yes/no flags;
+        prices are converted to AZN at fixed rates;
+  \item the scraper visited many listings several times, sometimes after a
+        price change: the \NRaw{} rows hold only \NUniqueListings{} distinct
+        listing URLs, and we keep the latest scrape of each;
+  \item we study \emph{residential} listings (new builds, old stock,
+        houses/villas; \NResidential{} listings). Land plots (area in
+        \emph{sot}, no rooms or floors), commercial objects, offices and
+        garages (\ScopeDroppedCats) are different markets; the scope is one
+        setting in \texttt{config.py};
   \item rows without a positive price or area are dropped, then exact
-        duplicates and re-posts (same price, area, rooms, floor and
-        coordinates);
+        duplicates and re-posts of the same flat under a new listing id (same
+        price, area, rooms, floor and coordinates);
   \item fixed plausibility rules remove typos and unit mix-ups
-        (Table~\ref{tab:cleaning}); impossible feature values (floor above
-        the building height, coordinates outside Azerbaijan) are set to
-        missing and imputed later.
+        (Table~\ref{tab:cleaning}); impossible feature values (floor above the
+        building height, coordinates outside Azerbaijan) are set to missing and
+        imputed later.
 \end{enumerate}
 The rules are constants chosen from domain knowledge, not statistics
 estimated on the data, so applying them before the split cannot leak.
@@ -193,8 +201,9 @@ From the cleaned rows we build \NNumericFeatures{} numeric/binary features
 ratio, top/ground-floor flags, land area, latitude, longitude, distance
 to the Baku centre, repair/mortgage/bill-of-sale flags and six keyword
 flags from the description, e.g.\ ``metro'' or ``d\schwa{}niz'' (sea)), plus
-one-hot encodings of category, building type, city and district
-(\NFeatures{} columns in total). One-hot rather than ordinal encoding is
+one-hot encodings of category, building type, city, administrative district
+(parsed from bina.az's location tags) and the finer location label (metro
+station or settlement), \NFeatures{} columns in total. One-hot rather than ordinal encoding is
 used because none of these has a natural order. Missing numeric values are
 imputed with the \emph{training} median and flagged by an indicator, and
 a category level gets its own column only if it has at least 20
@@ -421,7 +430,7 @@ optimum $J=\ObjLiblinear$ (gap \ObjGap), and the two agree on
 
 
 For the RFF extension, validation selects $\gamma=\RFFGamma$ and
-$\lambda=\RFFLambda$ (Fig.~\ref{fig:svmall}, bottom). The kernel-approximation error
+$\lambda=\RFFLambda$ (Fig.~\ref{fig:svmall}, bottom). \RFFGridNote{} The kernel-approximation error
 falls with a fitted log--log slope of \RFFErrSlope{} (theory: $-0.5$,
 i.e.\ $1/\sqrt{D}$), and validation AUC \RFFDVerdict.
 
@@ -604,11 +613,12 @@ central'', and RFF buys that flexibility at the price of tuning $\gamma$.
 \emph{Honest limitations.}
 (1) Asking prices are not transaction prices, and re-posted listings
 with edited prices can survive de-duplication.
-(2) Cleaning thresholds and the EUR rate are judgement calls. They are
-fixed and documented but not tuned, and filtering on price per m$^2$
-removes some genuine extremes along with typos.
-(3) One snapshot, one random split: CV quantifies sampling noise but not
-temporal drift. A time-based split would be the stricter test.
+(2) Cleaning thresholds and the residential scope are judgement calls.
+They are fixed and documented but not tuned, and filtering on price per
+m$^2$ removes some genuine extremes along with typos.
+(3) One six-week snapshot and one random split: CV quantifies sampling
+noise but not temporal drift. A time-based split would be the stricter
+test.
 (4) Task~B is a median split of Task~A's target, so it inherits all of
 Task~A's noise and has an irreducible error band at the threshold.
 (5) Our tree is several times slower than scikit-learn's, and Pegasos

@@ -378,8 +378,12 @@ def svm_studies(data: Data, s: Settings) -> dict:
                           n_epochs=s.svm_epochs, batch_size=s.svm_batch, random_state=SEED,
                           average=s.svm_average, record_objective=False).fit(Z_tr, t_tr)
         D_auc.append(ev.roc_auc(t_va, m.decision_function(Z_va)))
-        Phi = RandomFourierFeatures(Dn, best_rff["gamma"], SEED).fit(sub).transform(sub)
-        D_err.append(float(np.abs(Phi @ Phi.T - K).mean()))
+        # Monte-Carlo error of the kernel approximation, averaged over 5 random draws
+        errs = []
+        for rep in range(5):
+            Phi = RandomFourierFeatures(Dn, best_rff["gamma"], SEED + rep).fit(sub).transform(sub)
+            errs.append(float(np.abs(Phi @ Phi.T - K).mean()))
+        D_err.append(float(np.mean(errs)))
 
     out = s.figures_dir
     figs = [

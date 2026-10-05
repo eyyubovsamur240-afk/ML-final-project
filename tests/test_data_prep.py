@@ -30,10 +30,25 @@ def test_parse_floor_land_yes_no_currency():
     assert dp.parse_land_sot("600 m²") == 6.0
     assert dp.parse_land_sot("0.5 ha") == 50.0
     assert dp.parse_yes_no("var") == 1.0 and dp.parse_yes_no("yoxdur") == 0.0
-    assert np.isnan(dp.parse_yes_no(None))
+    assert dp.parse_yes_no("Çıxarış var") == 1.0 and dp.parse_yes_no("İpoteka var") == 1.0
+    assert dp.parse_yes_no("Təmirli") == 1.0 and dp.parse_yes_no("Təmirsiz") == 0.0
+    assert np.isnan(dp.parse_yes_no(None)) and np.isnan(dp.parse_yes_no("bilinmir"))
     assert dp.parse_currency("USD") == "USD"
     assert dp.parse_currency(None, "120 000 $") == "USD"
     assert dp.parse_currency(None, "120 000") == "AZN"
+
+
+def test_extract_district_from_location_tags():
+    assert dp.extract_district("Qara Qarayev m.* Nizami r.* 8-ci kilometr q.", "Qara Qarayev m.") == "nizami r."
+    assert dp.extract_district(None, "Səbail r.") == "sebail r."
+    assert np.isnan(dp.extract_district(None, "Gənclik m."))
+
+
+def test_canonicalize_prefers_the_clean_duplicate_column():
+    raw = pd.DataFrame({"repair": ["Təmirli"], "Təmir": ["yoxdur"], "currency_x": ["AZN"]})
+    out, mapping = dp.canonicalize_columns(raw)
+    assert mapping["Təmir"] == "repair_raw" and mapping["currency_x"] == "currency"
+    assert "repair" in out.columns            # the other version is left unused
 
 
 def test_normalize_name_handles_azerbaijani():
@@ -69,6 +84,16 @@ def test_clean_drops_leakage_identifier_and_meta_columns(cleaned):
     assert {"owner_name", "address"} <= set(log.dropped_columns["identifiers"])
     assert "vip" in log.dropped_columns["listing_meta"]
     assert not any("price" in c and c != "price_azn" for c in df.columns)
+
+
+def test_clean_keeps_latest_scrape_and_scope(cleaned):
+    df, log = cleaned
+    steps = dict(log.steps)
+    assert steps["repeat scrapes of a listing removed (latest kept)"] < steps["raw rows"]
+    assert set(df["category"]) <= {"yeni tikili", "kohne tikili", "heyet evi/bag evi"}
+    assert "listing_key" in log.dropped_columns["identifiers"]
+    assert df["district"].notna().mean() > 0.9
+    assert df["repair"].isin([0.0, 1.0]).mean() > 0.9   # parsed from "var"/"yoxdur"
 
 
 def test_clean_rules_hold(cleaned):
