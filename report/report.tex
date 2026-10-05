@@ -498,6 +498,32 @@ presorted order. Pegasos costs $O(\text{epochs}\cdot n d)$ and fits in
 \OurSVMFit\,s. The exact-kernel SVC is $O(n^2)$--$O(n^3)$ (\SkSVCFit\,s),
 the main practical argument for RFF.
 
+\emph{Scaling.} To check these orders empirically we refit every model at
+its selected configuration on nested training subsamples of
+\ScaleMinN--\ScaleMaxN{} rows (\texttt{src/scaling.py}) and fit
+$t\approx a\,n^{b}$ through the three largest sizes
+(Table~\ref{tab:scaling}, Fig.~\ref{fig:scaling}). Fit time grows with
+exponent $b=\ScaleExpOursTreeA$ for our Task~A tree
+(scikit-learn: \ScaleExpSkTreeA), \ScaleExpPegasos{} for Pegasos,
+\ScaleExpRFF{} for RFF + Pegasos and \ScaleExpSVC{} for the exact-kernel
+SVC. The trees and the Pegasos models stay close to the
+$O(n\log n)$/$O(n)$ of the analysis, so the gap to scikit-learn is a
+constant factor (our tree is \ScaleTreeRatioA$\times$ slower at full size
+on Task~A, \ScaleTreeRatioB$\times$ on Task~B), not a worse algorithm.
+The kernel SVC is the only super-linear method; at this dataset's size
+that is what forces it onto a subsample.
+
+\begin{table}[t]
+  \centering
+  \caption{Fit time vs.\ training size: exponent $b$ of
+  $t\approx a\,n^b$ (three largest subsamples), and fit/predict time at the
+  largest size (predict on the validation split). Theory: CART
+  $O(n\log n)$, Pegasos/SGD/LIBLINEAR $O(n)$ per epoch, kernel SVC
+  $O(n^2)$--$O(n^3)$.}
+  \label{tab:scaling}
+  \fit{\gen{tab_scaling}}
+\end{table}
+
 \begin{table}[t]
   \centering
   \caption{Our tree vs.\ scikit-learn, node by node (final models; depth
@@ -698,9 +724,28 @@ and in the \WeakTierBand{} AZN band (\WeakTierBandErr\ThresholdBandNote).
   \fit{\gen{tab_error_band}}
 \end{table}
 
-\subsection{Bonus: ridge, ensembles of our trees, clustering}
+\subsection{Bonus: ridge, SVR, ensembles of our trees, clustering}
 \emph{Ridge} (normal equations, $\alpha=\RidgeAlpha$ chosen on
 validation) matches scikit-learn's \texttt{Ridge} to machine precision.
+\emph{SVR} (\texttt{src/svr.py}) turns our SVM into a Task~A model: the
+same Pegasos step on the $\varepsilon$-insensitive primal
+$\frac{\lambda}{2}\lVert\vect w\rVert^2+\frac1n\sum_i
+\max(0,|y_i-\vect w^\top\vect x_i|-\varepsilon)$, whose sub-gradient is
+$-\mathrm{sign}(r_i)\,\vect x_i$ outside the tube and 0 inside. Because a
+regressor's predictions depend on the \emph{scale} of $\vect w$, not only
+its sign, the first $1/\lambda$ Pegasos steps are too large to settle
+within our epoch budget, so we offset the schedule to
+$\eta_t=1/(\lambda(t+t_0))$ with $\eta_1=1/\overline{\lVert\vect
+x\rVert^2}$. Chosen on validation: $\lambda=\SVRLambda$,
+$\varepsilon=\SVREpsilon$ (in $\log$ units); RFF $\gamma=\SVRRFFGamma$,
+$\lambda=\SVRRFFLambda$. On the test split the linear SVR reaches RMSE
+\SVRRMSE{} (LIBLINEAR \texttt{LinearSVR}: \SkSVRRMSE; objective gap
+\SVRObjGap) and the RFF SVR \RFFSVRRMSE{} (\texttt{SVR} with the exact
+RBF kernel on a \SVRSubsample-row subsample: \SkKSVRRMSE;
+Table~\ref{tab:svr}). The absolute loss makes the SVR robust to the luxury
+tail, but on $\log$ price that tail is already compressed: the linear SVR
+is \SVRVsRidgeWord{} ridge (\RidgeRMSE), and neither SVR reaches the
+forest.
 \emph{Ensembles} (Fig.~\ref{fig:ens}, Table~\ref{tab:bonus}): a random
 forest of \RFTrees{} of our trees (bootstrap + a third of the features per
 split) \ForestVsTreeWord{} the test RMSE: \RFRMSE{} against \OurTreeRMSE{}
@@ -721,6 +766,16 @@ components for 90\% of the variance; the first two hold only
   \caption{Bonus models on Task A (test split).}
   \label{tab:bonus}
   \fit{\gen{tab_bonus}}
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \caption{Bonus: support-vector regression on Task A (test split), ours
+  vs.\ scikit-learn with matched $C=1/(n\lambda)$, $\varepsilon$ and
+  $\gamma$. $^\ddagger$Trained on a \SVRSubsample-row subsample
+  (quadratic kernel solver).}
+  \label{tab:svr}
+  \fit{\gen{tab_svr}}
 \end{table}
 
 
@@ -882,6 +937,16 @@ sehriyarmemmedli, ``Bina.az sale project,'' Kaggle dataset.
   median $\log$ price; PCA explained variance and the two tiers in the
   first two components.}
   \label{fig:km}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{scaling_fit_time}
+  \caption{Fit time vs.\ number of training listings (log--log), trees (a)
+  and SVMs (b); $b$ is the fitted exponent of $t\approx a\,n^b$. Solid:
+  ours; dashed: scikit-learn. LIBLINEAR's time depends on how many dual
+  iterations it needs at each $C$, hence its uneven curve.}
+  \label{fig:scaling}
 \end{figure}
 
 \end{document}

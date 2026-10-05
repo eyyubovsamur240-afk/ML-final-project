@@ -336,6 +336,67 @@ def _bold_best(values: list, higher: bool) -> list[bool]:
     return [bool(np.isfinite(a) and np.isclose(a, best)) for a in arr]
 
 
+_SCALE_MACROS = {
+    "Ours: tree (A)": "OursTreeA", "sklearn tree (A)": "SkTreeA", "Ours: tree (B)": "OursTreeB",
+    "sklearn tree (B)": "SkTreeB", "Ours: Pegasos": "Pegasos", "sklearn SGDClassifier": "SGD",
+    "sklearn LinearSVC": "LinearSVC", "Ours: RFF + Pegasos": "RFF", "sklearn SVC (RBF)": "SVC",
+}
+
+
+def _scaling_and_svr(T: TexWriter, R: dict) -> None:
+    """Fit-time scaling study (src/scaling.py) and the SVR bonus (src/svr.py)."""
+    sc = R.get("scaling")
+    if sc:
+        rows = []
+        for name, rec in sc["models"].items():
+            T.macro("ScaleExp" + _SCALE_MACROS[name], num(rec["fit_exponent"], 2))
+            rows.append([tex_escape(name), num(rec["fit_exponent"], 2), num(rec["n"][-1], 0),
+                         num(rec["fit_s"][-1], 2), num(rec["predict_s"][-1], 3)])
+        T.table("tab_scaling", _tabular("@{}lcrrr@{}", ["Model", "Exponent $b$", "Largest $n$",
+                                                        "Fit (s)", "Predict (s)"], rows))
+        T.macro("ScaleMaxN", num(sc["sizes"][-1], 0))
+        T.macro("ScaleMinN", num(sc["sizes"][0], 0))
+        m = sc["models"]
+        for task in ("A", "B"):
+            ours, sk = m[f"Ours: tree ({task})"]["fit_s"][-1], m[f"sklearn tree ({task})"]["fit_s"][-1]
+            T.macro(f"ScaleTreeRatio{task}", num(ours / sk, 1) if sk > 0 else "--")
+    else:
+        T.table("tab_scaling", "(scaling study not run)")
+        for k in list(_SCALE_MACROS.values()):
+            T.macro("ScaleExp" + k, "--")
+        for k in ("ScaleMaxN", "ScaleMinN", "ScaleTreeRatioA", "ScaleTreeRatioB"):
+            T.macro(k, "--")
+
+    svr = R.get("bonus", {}).get("svr")
+    keys = ("SVRLambda", "SVREpsilon", "SVRRFFGamma", "SVRRFFLambda", "SVRRMSE", "SkSVRRMSE",
+            "RFFSVRRMSE", "SkKSVRRMSE", "SVRObjGap", "SVRTube", "SVRSubsample", "SVRVsRidgeWord")
+    if not svr:
+        for k in keys:
+            T.macro(k, "--")
+        T.table("tab_svr", "(SVR bonus skipped)")
+        return
+    t = svr["test"]
+    T.macro("SVRLambda", sci(svr["best"]["lambda_"]))
+    T.macro("SVREpsilon", num(svr["best"]["epsilon"], 2))
+    T.macro("SVRRFFGamma", num(svr["best_rff"]["gamma"], 3))
+    T.macro("SVRRFFLambda", sci(svr["best_rff"]["lambda_"]))
+    T.macro("SVRRMSE", num(t["Ours: linear SVR"]["metrics"]["rmse_log"]))
+    T.macro("SkSVRRMSE", num(t["sklearn LinearSVR"]["metrics"]["rmse_log"]))
+    T.macro("RFFSVRRMSE", num(t["Ours: RBF SVR (RFF)"]["metrics"]["rmse_log"]))
+    T.macro("SkKSVRRMSE", num(t["sklearn SVR (RBF)"]["metrics"]["rmse_log"]))
+    o = svr["objective"]
+    T.macro("SVRObjGap", pct((o["ours"] - o["sklearn"]) / o["sklearn"], 2))
+    T.macro("SVRTube", pct(svr["tube_fraction_test"]))
+    ridge = R["final"]["regression"].get("Ours: ridge (bonus)", {}).get("metrics", {}).get("rmse_log")
+    d = t["Ours: linear SVR"]["metrics"]["rmse_log"] - ridge if ridge is not None else None
+    T.macro("SVRVsRidgeWord", "--" if d is None else "on a par with" if abs(d) < 0.005
+            else "slightly better than" if d < 0 else "slightly worse than")
+    T.macro("SVRSubsample", num(svr["svr_subsample"], 0))
+    rows = [[tex_escape(n) + ("$^\\ddagger$" if n == "sklearn SVR (RBF)" else ""),
+             num(d["metrics"]["rmse_log"]), num(d["metrics"]["r2_log"]), num(d["metrics"]["mae_azn"], 0),
+             num(d["times"]["fit_s"], 2)] for n, d in t.items()]
+    T.table("tab_svr", _tabular("@{}lcccr@{}", ["Task A model (test)", "RMSE (log)", "$R^2$",
+                                                "MAE (AZN)", "Fit (s)"], rows))
 EXPLAIN_MACROS = ("ExplainRefModel", "PermTopReg", "PermTopClf", "PermTopRegGroup", "PermTopClfGroup",
                   "PermAgreeReg", "PermAgreeClf", "PermRepeats", "PermGroups",
                   "WeakDistrict", "WeakDistrictRMSE", "WeakDistrictN", "StrongDistrict", "StrongDistrictRMSE",
@@ -792,6 +853,7 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
         T.table("tab_bonus", "(bonus experiments skipped)")
     paired = _write_paired(T, R)
     _explain(T, R)
+    _scaling_and_svr(T, R)
     _verdicts(T, R)
     T.macro("RunMode", "fast smoke-test" if R["settings"]["fast"] else "full")
     T.flush()

@@ -13,8 +13,8 @@ Stages (see src/experiments.py for the protocol):
   4. Pegasos SVM studies + selection on validation     (Task B, linear + RFF)
   5. refit chosen configs on train+val, score the TEST split once
   6. k-fold CV on train+val for mean ± std (all models, sklearn baselines too)
-  7. benchmark details + error analysis
-  8. bonuses: ridge, random forest / gradient boosting from our trees, k-means, PCA
+  7. benchmark details + error analysis; fit/predict time vs training size
+  8. bonuses: ridge, SVR, random forest / gradient boosting from our trees, k-means, PCA
      then permutation importance per model + error breakdown by district / price band
   9. write results/ (json, csv) and report/generated/ (LaTeX macros + tables)
 
@@ -35,6 +35,7 @@ from . import data_prep as dp
 from . import evaluate as ev
 from . import experiments as ex
 from . import explain, reporting
+from .scaling import scaling_study
 
 
 def file_sha256(path: Path) -> str:
@@ -122,6 +123,8 @@ def main(argv=None) -> dict:
     # 7. analysis -----------------------------------------------------------------------------
     ex.log_step("Benchmark details and error analysis")
     R["analysis"] = ex.analysis(data, s, fin)
+    ex.log_step("Fit/predict time vs training size (train -> validation)")
+    R["scaling"] = scaling_study(ex.design(data, data.tr, data.va), s, R["tree"], R["svm"])
 
     # 8. bonus ----------------------------------------------------------------------------------
     if not args.skip_bonus:
@@ -129,7 +132,9 @@ def main(argv=None) -> dict:
         ens = ex.bonus_ensembles(data, s, R["tree"], fin)
         ex.log_step("Bonus: k-means + PCA")
         uns = ex.bonus_unsupervised(data, s, fin, R["tree"])
-        R["bonus"] = {"ensembles": ens, "unsupervised": uns}
+        ex.log_step("Bonus: support-vector regression from our SVM (Task A)")
+        svr = ex.bonus_svr(data, s, fin)
+        R["bonus"] = {"ensembles": ens, "unsupervised": uns, "svr": svr}
 
     # 8b. explanations -------------------------------------------------------------------------
     ex.log_step("Feature importance (permutation) and error breakdown by district / price band")

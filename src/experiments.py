@@ -29,7 +29,7 @@ from sklearn.linear_model import Ridge as SkRidge
 from sklearn.linear_model import SGDClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC, LinearSVC
+from sklearn.svm import SVC, SVR, LinearSVC, LinearSVR
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from . import config, plots
@@ -40,6 +40,7 @@ from .decision_tree import DecisionTree
 from .ensemble import GradientBoostingRegressor, RandomForest
 from .linear import RidgeRegression
 from .svm import PegasosSVM, RandomFourierFeatures, RFFPegasosSVM, rbf_kernel
+from .svr import PegasosSVR, RFFPegasosSVR
 from .tree_compare import compare_tree_structure
 
 SEED = config.SEED
@@ -863,6 +864,73 @@ def bonus_unsupervised(data: Data, s: Settings, fin, tree_res) -> dict:
     return dict(inertia={"k": ks, "inertia": inertia}, clusters=per, ablation=ablation,
                 pca_components_for_90pct=int(np.searchsorted(evr, 0.9) + 1),
                 pca_pc1_pc2_share=float(evr[1]), figures=[fig1, fig2])
+
+
+def bonus_svr(data: Data, s: Settings, fin) -> dict:
+    """
+    Bonus (Problem 8): our SVM turned into a Task A regressor (src/svr.py).
+    lambda, epsilon (and the RFF bandwidth) are chosen on VALIDATION; the
+    chosen configs are refitted on dev and scored on the test split once,
+    next to sklearn's LinearSVR / SVR(rbf) with matched C = 1/(n lambda).
+    """
+    lambdas = config.FAST["svr_lambdas"] if s.fast else config.SVR_LAMBDAS
+    gammas = config.FAST["svr_rff_gammas"] if s.fast else config.SVR_RFF_GAMMAS
+    epochs = s.svm_epochs if s.fast else config.SVR_EPOCHS
+    kw = dict(n_epochs=epochs, batch_size=s.svm_batch, random_state=SEED, record_objective=False)
+    Dv = design(data, data.tr, data.va)
+    grid = []
+    for eps in config.SVR_EPSILONS:
+        for lam in lambdas:
+            m = PegasosSVR(lambda_=lam, epsilon=eps, **kw).fit(Dv.Z[0], Dv.ylog[0])
+            grid.append(dict(lambda_=lam, epsilon=eps, val_rmse=ev.rmse(Dv.ylog[1], m.predict(Dv.Z[1]))))
+    best = min(grid, key=lambda r: r["val_rmse"])
+    rff_grid = []
+    for g in gammas:
+        for lam in config.SVR_RFF_LAMBDAS if not s.fast else lambdas:
+            m = RFFPegasosSVR(gamma=g, n_components=s.rff_components, lambda_=lam,
+                              epsilon=best["epsilon"], **kw).fit(Dv.Z[0], Dv.ylog[0])
+            rff_grid.append(dict(gamma=g, lambda_=lam, val_rmse=ev.rmse(Dv.ylog[1], m.predict(Dv.Z[1]))))
+    best_rff = min(rff_grid, key=lambda r: r["val_rmse"])
+    log_step(f"  SVR selected: linear lambda={best['lambda_']:g} eps={best['epsilon']} "
+             f"(val {best['val_rmse']:.4f}); RFF gamma={best_rff['gamma']} lambda={best_rff['lambda_']:g} "
+             f"(val {best_rff['val_rmse']:.4f})")
+
+    D = fin["_design"]
+    n = len(D.ylog[0])
+    eps = best["epsilon"]
+    models = {
+        "Ours: linear SVR": lambda: PegasosSVR(lambda_=best["lambda_"], epsilon=eps,
+                                               **{**kw, "record_objective": True}),
+        "sklearn LinearSVR": lambda: LinearSVR(C=1.0 / (n * best["lambda_"]), epsilon=eps,
+                                               loss="epsilon_insensitive", dual=True,
+                                               max_iter=5_000, random_state=SEED),
+        "Ours: RBF SVR (RFF)": lambda: RFFPegasosSVR(gamma=best_rff["gamma"], n_components=s.rff_components,
+                                                     lambda_=best_rff["lambda_"], epsilon=eps, **kw),
+        "sklearn SVR (RBF)": lambda: SVR(kernel="rbf", gamma=best_rff["gamma"],
+                                         C=1.0 / (n * best_rff["lambda_"]), epsilon=eps),
+    }
+    res, fitted = {}, {}
+    rng_idx = np.random.default_rng(SEED).choice(n, min(n, s.svc_max_train), replace=False)
+    for name, make in models.items():
+        idx = rng_idx if name == "sklearn SVR (RBF)" else slice(None)   # O(n^2) kernel solver
+        model, times = make(), {}
+        with ev.timer(times, "fit_s"):
+            model.fit(D.Z[0][idx], D.ylog[0][idx])
+        with ev.timer(times, "predict_s"):
+            pred = model.predict(D.Z[1])
+        res[name] = {"metrics": ev.regression_metrics(D.ylog[1], pred), "times": times}
+        fitted[name] = model
+        log_step(f"  [A] {name:34s} RMSE(log)={res[name]['metrics']['rmse_log']:.4f} fit={times['fit_s']:.2f}s")
+
+    # same primal for both linear solvers -> compare the objective each one reaches
+    ours, sk = fitted["Ours: linear SVR"], fitted["sklearn LinearSVR"]
+    Xa, yc = ours._augment(D.Z[0]), D.ylog[0] - ours.y_mean_
+    w_sk = np.r_[sk.coef_, sk.intercept_[0] - ours.y_mean_]
+    obj = {"ours": ours.objective(Xa, yc)[0], "sklearn": ours.objective(Xa, yc, w_sk)[0],
+           "history": ours.history_["objective"]}
+    return dict(grid=grid, best=best, rff_grid=rff_grid, best_rff=best_rff, test=res, objective=obj,
+                tube_fraction_test=ours.tube_fraction(D.Z[1], D.ylog[1]),
+                svr_subsample=int(len(rng_idx)))
 
 
 def _kmeans_fig(ks, inertia, xy, km, cl_med, s):

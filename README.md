@@ -91,6 +91,8 @@ From `python -m src.run_all` on `house_sale.csv` (SHA-256 `b6a4c67e0d3c…`): 10
 │   ├── evaluate.py           #   metrics from scratch (RMSE … ROC-AUC, PR-AUC), bootstrap, tables
 │   ├── tree_compare.py       #   node-by-node comparison of our tree with sklearn's
 │   ├── linear.py             #   bonus: ridge via normal equations
+│   ├── svr.py                #   bonus: epsilon-insensitive SVR (Pegasos step, + RFF kernel)
+│   ├── scaling.py            #   fit/predict time vs training size, empirical exponents
 │   ├── ensemble.py           #   bonus: random forest + gradient boosting from OUR trees
 │   ├── clustering.py         #   bonus: k-means++ and PCA from scratch
 │   ├── experiments.py        #   the study / selection / test / CV / analysis stages
