@@ -329,8 +329,9 @@ in code (best validation score, ties to the simpler model).
 (2) The chosen configurations are refitted on train+validation
 (\NDev{} rows) with imputation, encoding, scaling and the tier threshold
 re-learned on those rows (threshold \TierThresholdDev{} AZN), and scored
-once on the test split with 95\% percentile-bootstrap intervals (1{,}000
-resamples). (3) For uncertainty, \CVFolds-fold stratified CV on
+once on the test split with 95\% percentile-bootstrap intervals (\NBoot{}
+resamples). Differences between two models are tested with a \emph{paired}
+bootstrap on the same resampled test rows (Section~\ref{sec:paired}). (3) For uncertainty, \CVFolds-fold stratified CV on
 train+validation repeats the whole preprocessing inside every fold and
 reports mean$\pm$std.
 
@@ -497,6 +498,32 @@ presorted order. Pegasos costs $O(\text{epochs}\cdot n d)$ and fits in
 \OurSVMFit\,s. The exact-kernel SVC is $O(n^2)$--$O(n^3)$ (\SkSVCFit\,s),
 the main practical argument for RFF.
 
+\emph{Scaling.} To check these orders empirically we refit every model at
+its selected configuration on nested training subsamples of
+\ScaleMinN--\ScaleMaxN{} rows (\texttt{src/scaling.py}) and fit
+$t\approx a\,n^{b}$ through the three largest sizes
+(Table~\ref{tab:scaling}, Fig.~\ref{fig:scaling}). Fit time grows with
+exponent $b=\ScaleExpOursTreeA$ for our Task~A tree
+(scikit-learn: \ScaleExpSkTreeA), \ScaleExpPegasos{} for Pegasos,
+\ScaleExpRFF{} for RFF + Pegasos and \ScaleExpSVC{} for the exact-kernel
+SVC. The trees and the Pegasos models stay close to the
+$O(n\log n)$/$O(n)$ of the analysis, so the gap to scikit-learn is a
+constant factor (our tree is \ScaleTreeRatioA$\times$ slower at full size
+on Task~A, \ScaleTreeRatioB$\times$ on Task~B), not a worse algorithm.
+The kernel SVC is the only super-linear method; at this dataset's size
+that is what forces it onto a subsample.
+
+\begin{table}[t]
+  \centering
+  \caption{Fit time vs.\ training size: exponent $b$ of
+  $t\approx a\,n^b$ (three largest subsamples), and fit/predict time at the
+  largest size (predict on the validation split). Theory: CART
+  $O(n\log n)$, Pegasos/SGD/LIBLINEAR $O(n)$ per epoch, kernel SVC
+  $O(n^2)$--$O(n^3)$.}
+  \label{tab:scaling}
+  \fit{\gen{tab_scaling}}
+\end{table}
+
 \begin{table}[t]
   \centering
   \caption{Our tree vs.\ scikit-learn, node by node (final models; depth
@@ -506,6 +533,57 @@ the main practical argument for RFF.
   \label{tab:tree-compare}
   \fit{\gen{tab_tree_compare}}
 \end{table}
+
+\subsection{Are the differences real?}\label{sec:paired}
+Several gaps in Tables~\ref{tab:reg} and~\ref{tab:clf} are in the third
+decimal, and a single test split could produce them by chance. To check,
+we resample the \NTest{} test rows with replacement \NBoot{} times and
+score \emph{both} models of a pair on the same resample. Rows that are
+hard for one model are usually hard for the other, so this shared noise
+cancels in the difference, and its interval is much narrower than the two
+per-model intervals in Tables~\ref{tab:reg}--\ref{tab:clf} would suggest.
+A difference counts as real when its 95\% percentile interval excludes
+zero; $p$ is the two-sided bootstrap $p$-value
+$2\min\{P(d^*\le 0),P(d^*\ge 0)\}$ (\texttt{evaluate.paired\_bootstrap}).
+
+Table~\ref{tab:paired} lists all \PairedN{} comparisons, of which
+\PairedNSig{} are significant, including \PairedNOursVsSkSig{} of the
+\PairedNOursVsSk{} comparisons of our code with scikit-learn.
+\emph{Task~A:} our tree's test RMSE minus scikit-learn's is
+\PairedAOurTreeVsSklearnTreeRMSEDiff{} \PairedAOurTreeVsSklearnTreeRMSECI{}
+(\PairedAOurTreeVsSklearnTreeRMSEWord), and our forest's minus
+scikit-learn's is \PairedAOurForestVsSklearnForestRMSEDiff{}
+\PairedAOurForestVsSklearnForestRMSECI{}
+(\PairedAOurForestVsSklearnForestRMSEWord). The forest's gain over our
+single tree is \PairedAOurForestVsOurSingleTreeRMSEDiff{}
+\PairedAOurForestVsOurSingleTreeRMSECI{}
+(\PairedAOurForestVsOurSingleTreeRMSEWord).
+\emph{Task~B:} averaged Pegasos minus LIBLINEAR is
+\PairedBPegasosVsLinearSVCFOneDiff{} F1 \PairedBPegasosVsLinearSVCFOneCI{}
+(\PairedBPegasosVsLinearSVCFOneWord), and the RFF SVM minus the exact
+kernel SVC is \PairedBRFFSVMVsSVCRBFAUCDiff{} ROC-AUC
+\PairedBRFFSVMVsSVCRBFAUCCI{} (\PairedBRFFSVMVsSVCRBFAUCWord). The
+kernel's gain over the linear SVM is \PairedBRFFSVMVsPegasosFOneDiff{} F1
+(\PairedBRFFSVMVsPegasosFOneWord) and \PairedBRFFSVMVsPegasosAUCDiff{}
+ROC-AUC (\PairedBRFFSVMVsPegasosAUCWord). Our tree minus the RFF SVM is
+\PairedBOurTreeVsRFFSVMFOneDiff{} F1 (\PairedBOurTreeVsRFFSVMFOneWord)
+and \PairedBOurTreeVsRFFSVMAUCDiff{} ROC-AUC
+(\PairedBOurTreeVsRFFSVMAUCWord), so the ``tree wins F1, SVM wins AUC''
+split can be read off with its uncertainty. A significant difference is
+not automatically a meaningful one: with \NTest{} rows, gaps of a few
+thousandths of RMSE can be detected but are far below what a buyer would
+notice.
+
+\begin{table*}[tp]
+  \centering
+  \caption{Paired bootstrap comparisons on the test split. Difference =
+  first $-$ second (lower is better for RMSE, higher for F1 and ROC-AUC;
+  $R^2$ is omitted because on a fixed test sample it is a monotone function
+  of RMSE), with its 95\% percentile interval over \NBoot{} resamples of
+  the test rows. ``No real difference'': the interval contains~0.}
+  \label{tab:paired}
+  \fit{\gen{tab_paired}}
+\end{table*}
 
 \subsection{Error analysis}
 \emph{What the models use.} Our tree's impurity-based importances
@@ -577,9 +655,97 @@ premium than one just below it.
   \fit{\gen{tab_worst}}
 \end{table}
 
-\subsection{Bonus: ridge, ensembles of our trees, clustering}
+\subsection{Feature importance across models}
+MDI importances exist only for trees and are measured on training data.
+To compare every model on the same footing we use \emph{permutation
+importance} on the test split: shuffle one feature across rows, re-score
+the fitted model, and record how much worse it gets (Task~A: increase in
+RMSE of $\log$ price; Task~B: drop in ROC-AUC; mean of \PermRepeats{}
+shuffles). The \NFeatures{} design columns are grouped into \PermGroups{}
+raw features, so all one-hot columns of \texttt{district} or
+\texttt{location} are shuffled together and a categorical feature is not
+split across dozens of small columns; area and $\log$ area form one
+group because they carry the same information. No model is refitted.
+
+For Task~A (Fig.~\ref{fig:perm}, left), \ExplainRefModel{} relies most on
+\PermTopReg. \PermAgreeReg{} For Task~B (right) the RFF SVM relies most on
+\PermTopClf. \PermAgreeClf{} Two caveats apply. Correlated features
+(area and area per room; latitude, longitude and distance to the
+centre) can stand in for each other, so shuffling one of them
+understates how much the model needs the shared information. And the
+importance of a feature is a property of the model, not of the market:
+a feature a model ignores may still be predictive.
+
+\begin{figure*}[tp]
+  \centering
+  \includegraphics[width=\textwidth]{feature_importance_permutation}
+  \caption{Permutation importance on the test split, per raw feature
+  (one-hot columns grouped). Bars: mean over shuffles; whiskers: std.
+  Features are ranked by the forest (Task~A) and the RFF SVM (Task~B).}
+  \label{fig:perm}
+\end{figure*}
+
+\subsection{Where the models are weakest}
+Fig.~\ref{fig:breakdown} and Tables~\ref{tab:err-district}--\ref{tab:err-band}
+split the test error by named district (the \texttt{r.}\ tag on bina.az;
+districts with fewer than 30 test listings are pooled as ``other'') and
+by true price band. For \ExplainRefModel{} (overall RMSE
+\OverallRefRMSE), the weakest district is \WeakDistrict{} (RMSE
+\WeakDistrictRMSE{} on \WeakDistrictN{} listings) and the strongest is
+\StrongDistrict{} (\StrongDistrictRMSE). By price, the error is largest
+for \WeakBand{} AZN (\WeakBandRMSE) and smallest for \StrongBand{} AZN
+(\StrongBandRMSE). The mean residual of \ExplainRefModel{} is
+\BottomBandBias{} in the cheapest band and \TopBandBias{} in the most
+expensive one. \ShrinkSentence{} \DistrictRankCorr{} For Task~B the RFF
+SVM's error rate is highest in \WeakTierDistrict{} (\WeakTierDistrictErr)
+and in the \WeakTierBand{} AZN band (\WeakTierBandErr\ThresholdBandNote).
+
+\begin{figure*}[tp]
+  \centering
+  \includegraphics[width=\textwidth]{error_breakdown}
+  \caption{Task~A test RMSE of $\log(\text{price})$ by district and by
+  true price band, one marker per model (test rows in brackets).}
+  \label{fig:breakdown}
+\end{figure*}
+
+\begin{table}[t]
+  \centering
+  \caption{Test error by district. RMSE of $\log$ price for Task~A
+  models; tier error rate (err.) for Task~B models.}
+  \label{tab:err-district}
+  \fit{\gen{tab_error_district}}
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \caption{Test error by true price band (columns as in
+  Table~\ref{tab:err-district}).}
+  \label{tab:err-band}
+  \fit{\gen{tab_error_band}}
+\end{table}
+
+\subsection{Bonus: ridge, SVR, ensembles of our trees, clustering}
 \emph{Ridge} (normal equations, $\alpha=\RidgeAlpha$ chosen on
 validation) matches scikit-learn's \texttt{Ridge} to machine precision.
+\emph{SVR} (\texttt{src/svr.py}) turns our SVM into a Task~A model: the
+same Pegasos step on the $\varepsilon$-insensitive primal
+$\frac{\lambda}{2}\lVert\vect w\rVert^2+\frac1n\sum_i
+\max(0,|y_i-\vect w^\top\vect x_i|-\varepsilon)$, whose sub-gradient is
+$-\mathrm{sign}(r_i)\,\vect x_i$ outside the tube and 0 inside. Because a
+regressor's predictions depend on the \emph{scale} of $\vect w$, not only
+its sign, the first $1/\lambda$ Pegasos steps are too large to settle
+within our epoch budget, so we offset the schedule to
+$\eta_t=1/(\lambda(t+t_0))$ with $\eta_1=1/\overline{\lVert\vect
+x\rVert^2}$. Chosen on validation: $\lambda=\SVRLambda$,
+$\varepsilon=\SVREpsilon$ (in $\log$ units); RFF $\gamma=\SVRRFFGamma$,
+$\lambda=\SVRRFFLambda$. On the test split the linear SVR reaches RMSE
+\SVRRMSE{} (LIBLINEAR \texttt{LinearSVR}: \SkSVRRMSE; objective gap
+\SVRObjGap) and the RFF SVR \RFFSVRRMSE{} (\texttt{SVR} with the exact
+RBF kernel on a \SVRSubsample-row subsample: \SkKSVRRMSE;
+Table~\ref{tab:svr}). The absolute loss makes the SVR robust to the luxury
+tail, but on $\log$ price that tail is already compressed: the linear SVR
+is \SVRVsRidgeWord{} ridge (\RidgeRMSE), and neither SVR reaches the
+forest.
 \emph{Ensembles} (Fig.~\ref{fig:ens}, Table~\ref{tab:bonus}): a random
 forest of \RFTrees{} of our trees (bootstrap + a third of the features per
 split) \ForestVsTreeWord{} the test RMSE: \RFRMSE{} against \OurTreeRMSE{}
@@ -600,6 +766,16 @@ components for 90\% of the variance; the first two hold only
   \caption{Bonus models on Task A (test split).}
   \label{tab:bonus}
   \fit{\gen{tab_bonus}}
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \caption{Bonus: support-vector regression on Task A (test split), ours
+  vs.\ scikit-learn with matched $C=1/(n\lambda)$, $\varepsilon$ and
+  $\gamma$. $^\ddagger$Trained on a \SVRSubsample-row subsample
+  (quadratic kernel solver).}
+  \label{tab:svr}
+  \fit{\gen{tab_svr}}
 \end{table}
 
 
@@ -761,6 +937,15 @@ sehriyarmemmedli, ``Bina.az sale project,'' Kaggle dataset.
   median $\log$ price; PCA explained variance and the two tiers in the
   first two components.}
   \label{fig:km}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{scaling_fit_time}
+  \caption{Fit time vs.\ number of training listings (log--log), trees (a)
+  and SVMs (b); $b$ is the fitted exponent of $t\approx a\,n^b$. Solid:
+  ours; dashed: scikit-learn.}
+  \label{fig:scaling}
 \end{figure}
 
 \end{document}

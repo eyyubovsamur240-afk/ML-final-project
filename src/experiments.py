@@ -69,6 +69,7 @@ class Settings:
     cv_folds: int = config.CV_FOLDS
     n_boot: int = config.N_BOOT
     svc_max_train: int = 20_000
+    perm_repeats: int = 3
 
     @classmethod
     def make(cls, fast: bool, figures_dir) -> "Settings":
@@ -84,6 +85,7 @@ class Settings:
             s.forest_trees, s.boost_trees = f["forest_trees"], f["boost_trees"]
             s.cv_folds, s.n_boot = f["cv_folds"], f["n_boot"]
             s.svc_max_train = 3_000
+            s.perm_repeats = 1
         return s
 
 
@@ -508,8 +510,8 @@ def final_models(data: Data, s: Settings, tree_res, svm_res, ridge_alpha) -> dic
     for name, (kind, make) in reg_models(tree_res["best_reg"], ridge_alpha).items():
         model, pred, times = _fit_eval_reg(make, kind, D)
         m = ev.regression_metrics(y_te, pred)
-        lo, hi = ev.bootstrap_ci(ev.rmse, y_te, pred, n_boot=s.n_boot, seed=SEED)
-        m["rmse_log_ci"] = (lo, hi)
+        m["rmse_log_ci"] = ev.bootstrap_ci(ev.rmse, y_te, pred, n_boot=s.n_boot, seed=SEED)
+        m["r2_log_ci"] = ev.bootstrap_ci(ev.r2, y_te, pred, n_boot=s.n_boot, seed=SEED)
         res["regression"][name] = {"metrics": m, "times": times}
         res["_predictions"][f"reg::{name}"] = pred
         models[f"reg::{name}"] = model
@@ -532,9 +534,39 @@ def final_models(data: Data, s: Settings, tree_res, svm_res, ridge_alpha) -> dic
         models[f"clf::{name}"] = model
         log_step(f"  [B] {name:34s} F1={m['f1']:.4f} AUC={m['roc_auc']:.4f} "
                  f"fit={times['fit_s']:.2f}s")
+    res["paired"] = paired_tests(y_te, t_te, res["_predictions"], s.n_boot)
     res["_models"] = models
     res["_design"] = D
     return res
+
+
+# Task A tests RMSE only: on a fixed resample R^2 = 1 - MSE / var(y) is a monotone
+# function of RMSE, so its paired test gives the same verdict and p-value.
+PAIRED_METRICS = {"A": [("rmse_log", ev.rmse)],
+                  "B": [("f1", lambda y, p: ev.precision_recall_f1(y, p)[2]), ("roc_auc", ev.roc_auc)]}
+
+
+def paired_tests(y_log, tier, preds: dict, n_boot: int, pairs=config.PAIRED_COMPARISONS) -> list[dict]:
+    """
+    Paired bootstrap of every pair in ``pairs`` on the same test rows.
+    ``preds`` maps "reg::name" -> log-price predictions and "clf::name" ->
+    (labels, scores); F1 uses the labels, ROC-AUC the scores. Pairs with a
+    missing model are skipped.
+    """
+    rows = []
+    for task, label, a, b in pairs:
+        if a not in preds or b not in preds:
+            continue
+        for metric, fn in PAIRED_METRICS[task]:
+            if task == "A":
+                ya, yb, y = preds[a], preds[b], y_log
+            else:
+                j = 1 if metric == "roc_auc" else 0
+                ya, yb, y = preds[a][j], preds[b][j], tier
+            r = ev.paired_bootstrap(fn, y, ya, yb, n_boot=n_boot, seed=SEED)
+            rows.append({"task": task, "pair": label, "a": a.split("::", 1)[1],
+                         "b": b.split("::", 1)[1], "metric": metric, **r})
+    return rows
 
 
 # =============================================================================
@@ -762,7 +794,15 @@ def bonus_ensembles(data: Data, s: Settings, tree_res, fin) -> dict:
         curves={"rf": rf_curve, "gb": gb_curve}, times=times, figures=[fig],
         rf_importance_top=[(D.names[i], float(rf.feature_importances_[i]))
                            for i in np.argsort(rf.feature_importances_)[::-1][:8]],
+        _models={"Our random forest": ("X", rf), "Our gradient boosting": ("X", gb)},
     )
+    ens_preds = {"reg::Ours: random forest": rf.predict(X1), "reg::sklearn RandomForest": skrf.predict(X1),
+                 "reg::Ours: gradient boosting": gb.predict(X1), "reg::sklearn GradientBoosting": skgb.predict(X1),
+                 "reg::Ours: decision tree": fin["_predictions"]["reg::Ours: decision tree"],
+                 "clf::Ours: random forest": (rfc_pred, proba),
+                 "clf::sklearn RandomForest": (skrfc.predict(X1), skrfc.predict_proba(X1)[:, 1]),
+                 "clf::Ours: decision tree": fin["_predictions"]["clf::Ours: decision tree"]}
+    out["paired"] = paired_tests(y1, t1, ens_preds, s.n_boot, config.ENSEMBLE_PAIRS)
     log_step(f"  RF RMSE(log) ours={rf_curve[-1]:.4f} sklearn={sk_rf_rmse:.4f}; "
              f"GB ours={gb_curve[-1]:.4f} sklearn={sk_gb_rmse:.4f}")
     return out

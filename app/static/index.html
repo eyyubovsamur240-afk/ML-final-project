@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bina.az price estimator</title>
+  <meta name="description" content="Estimate a Baku property's price and premium tier with from-scratch decision trees and SVMs.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <h1>Price estimator</h1>
+      <p class="sub">Describe a flat or house in Azerbaijan and get a price estimate from
+        models we wrote from scratch in NumPy, trained on bina.az listings.</p>
+    </div>
+  </header>
+
+  <main class="wrap grid">
+    <form id="form" class="card" novalidate>
+      <h2>The property</h2>
+
+      <fieldset class="seg" id="category-group">
+        <legend>Type</legend>
+        <!-- filled from /api/options -->
+      </fieldset>
+
+      <div class="row">
+        <label>Area, m²<input name="area_m2" type="number" min="10" max="3000" step="1" required value="90"></label>
+        <label>Rooms<input name="rooms" type="number" min="1" max="20" step="1" value="3"></label>
+      </div>
+
+      <div class="row" id="floors">
+        <label>Floor<input name="floor" type="number" min="-2" max="60" step="1" value="7"></label>
+        <label>Floors in building<input name="total_floors" type="number" min="1" max="60" step="1" value="16"></label>
+      </div>
+
+      <div class="row" id="land" hidden>
+        <label>Land, sot <small>(1 sot = 100 m²)</small><input name="land_area_sot" type="number" min="0" step="0.5" value="6"></label>
+      </div>
+
+      <h2>Location</h2>
+      <label>Neighbourhood, metro or district
+        <select name="location" id="location"><option value="">Not sure</option></select>
+      </label>
+      <div id="map" class="map" aria-label="Map: click to set the exact spot (optional)"></div>
+      <p class="hint" id="coords">Click the map to set the exact spot (optional).</p>
+      <input type="hidden" name="lat"><input type="hidden" name="lng">
+
+      <h2>Details</h2>
+      <div class="checks">
+        <label><input type="checkbox" name="repair" checked> Renovated</label>
+        <label><input type="checkbox" name="bill_of_sale" checked> Has a kupça (bill of sale)</label>
+        <label><input type="checkbox" name="mortgage"> Mortgage available</label>
+      </div>
+      <label>Listing text <small>(optional; words like “metro”, “dəniz”, “avro təmir” matter)</small>
+        <textarea name="description" rows="3" maxlength="5000" placeholder="Paste the ad text here"></textarea>
+      </label>
+
+      <p class="error" id="error" role="alert" hidden></p>
+      <button type="submit" id="submit">Estimate price</button>
+    </form>
+
+    <section class="card result" id="result" aria-live="polite">
+      <div class="empty" id="empty">
+        <p>Your estimate will appear here.</p>
+      </div>
+      <div id="out" hidden>
+        <p class="label">Estimated price</p>
+        <p class="price" id="price"></p>
+        <p class="range" id="range"></p>
+        <div class="bar" aria-hidden="true"><span id="bar-mark"></span></div>
+        <p class="note" id="trees"></p>
+        <dl class="facts">
+          <div><dt>Per m²</dt><dd id="ppm"></dd></div>
+          <div><dt>Tier</dt><dd><span class="badge" id="tier"></span></dd></div>
+        </dl>
+        <p class="note" id="tier-note"></p>
+        <h3 class="label">What drove this price</h3>
+        <p class="hint" id="factors-base"></p>
+        <ul class="factors" id="factors"></ul>
+        <p class="note" id="place-note"></p>
+        <ul class="warnings" id="warnings"></ul>
+      </div>
+      <details class="about" id="about">
+        <summary>About the models</summary>
+        <div id="card">Loading…</div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    MLE-AI-201 final project · estimates are statistical, not a valuation ·
+    <a href="/docs">API docs</a>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -15,6 +15,7 @@ Stages (see src/experiments.py for the protocol):
   6. k-fold CV on train+val for mean ± std (all models, sklearn baselines too)
   7. benchmark details + error analysis; fit/predict time vs training size
   8. bonuses: ridge, SVR, random forest / gradient boosting from our trees, k-means, PCA
+     then permutation importance per model + error breakdown by district / price band
   9. write results/ (json, csv) and report/generated/ (LaTeX macros + tables)
 
 Everything is deterministic (config.SEED everywhere).
@@ -33,7 +34,7 @@ from . import config, plots
 from . import data_prep as dp
 from . import evaluate as ev
 from . import experiments as ex
-from . import reporting
+from . import explain, reporting
 from .scaling import scaling_study
 
 
@@ -70,7 +71,7 @@ def main(argv=None) -> dict:
     R: dict = {"settings": {"fast": args.fast, "seed": config.SEED, "svm_epochs": s.svm_epochs,
                             "svm_batch": s.svm_batch, "rff_components": s.rff_components,
                             "forest_trees": s.forest_trees, "boost_trees": s.boost_trees,
-                            "kmeans_k": config.KMEANS_K, "cv_folds": s.cv_folds}}
+                            "kmeans_k": config.KMEANS_K, "cv_folds": s.cv_folds, "n_boot": s.n_boot}}
 
     # 1. data ----------------------------------------------------------------
     path = dp.find_data_file(args.data)
@@ -134,6 +135,11 @@ def main(argv=None) -> dict:
         ex.log_step("Bonus: support-vector regression from our SVM (Task A)")
         svr = ex.bonus_svr(data, s, fin)
         R["bonus"] = {"ensembles": ens, "unsupervised": uns, "svr": svr}
+
+    # 8b. explanations -------------------------------------------------------------------------
+    ex.log_step("Feature importance (permutation) and error breakdown by district / price band")
+    extra = R["bonus"]["ensembles"]["_models"] if "bonus" in R else None
+    R["explain"] = explain.run(data, s, fin, extra, n_repeats=s.perm_repeats)
 
     # 9. outputs -----------------------------------------------------------------------------
     R["runtime_s"] = time.perf_counter() - t_start

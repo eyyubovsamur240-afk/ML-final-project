@@ -65,6 +65,31 @@ def test_bootstrap_ci_contains_point_estimate(reg):
     assert lo < ev.rmse(y, p) < hi
 
 
+def test_paired_bootstrap_detects_real_difference(reg):
+    y, p = reg
+    worse = p + np.random.default_rng(2).normal(0, 1, len(y))
+    r = ev.paired_bootstrap(ev.rmse, y, worse, p, n_boot=300)
+    assert r["diff"] == pytest.approx(ev.rmse(y, worse) - ev.rmse(y, p))
+    assert r["ci"][0] < r["diff"] < r["ci"][1]
+    assert r["significant"] and r["ci"][0] > 0 and r["p"] < 0.01
+
+
+def test_paired_bootstrap_identical_models_not_significant(clf):
+    y, _, s = clf
+    r = ev.paired_bootstrap(ev.roc_auc, y, s, s, n_boot=200)
+    assert r["diff"] == 0 and r["ci"] == (0.0, 0.0)
+    assert not r["significant"] and r["p"] == 1.0
+
+
+def test_paired_bootstrap_is_tighter_than_separate_cis(reg):
+    """Shared noise cancels: the CI of the difference is narrower than either model's CI."""
+    y, p = reg
+    q = p + np.random.default_rng(3).normal(0, 0.1, len(y))
+    r = ev.paired_bootstrap(ev.rmse, y, p, q, n_boot=300)
+    lo, hi = ev.bootstrap_ci(ev.rmse, y, p, n_boot=300)
+    assert r["ci"][1] - r["ci"][0] < (hi - lo) / 3
+
+
 def test_compare_prints_table(capsys):
     table = ev.compare({"ours": {"f1": 0.8, "auc": (0.9, 0.01)}, "sklearn": {"f1": 0.81, "auc": (0.91, 0.02)}})
     assert "ours" in capsys.readouterr().out
