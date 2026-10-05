@@ -312,7 +312,7 @@ def rff_study(gamma_curves, lambdas, D_grid, D_auc, D_err, out_dir):
     _plain_log_y(axes[2])
     axes[2].set_xlabel("Random features D")
     axes[2].set_ylabel(r"Mean $|\phi(x)^\top\phi(z) - k(x,z)|$")
-    _panel_label(axes[2], "(c) Kernel approximation")
+    _panel_label(axes[2], "(c) Kernel approx. (5 draws)")
     return _save(fig, out_dir, "svm_rff_study")
 
 
