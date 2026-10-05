@@ -1,0 +1,38 @@
+# --- Data: never commit the raw archive or the extracted dataset ---
+data/*
+!data/README.md
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# --- Generated outputs (all reproduced by `python -m src.run_all`) ---
+results/
+report/figures/*.pdf
+report/figures/*.png
+!report/figures/.gitkeep
+report/generated/
+*.csv.gz
+
+# --- LaTeX build files (the final report/slides PDFs MAY be committed) ---
+*.log
+*.aux
+*.out
+*.toc
+*.nav
+*.snm
+*.vrb
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# --- OS / editor cruft ---
+.DS_Store
+.idea/
+.vscode/

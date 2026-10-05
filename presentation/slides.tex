@@ -1,0 +1,193 @@
+% =====================================================================
+%  Final-project slides (Beamer). Numbers/figures come from the same
+%  generated files as the report:  python -m src.run_all  first, then
+%      cd presentation && pdflatex slides.tex && pdflatex slides.tex
+%  -> presentation/slides.pdf (submit this PDF on Moodle).
+% =====================================================================
+\documentclass[aspectratio=169,10pt]{beamer}
+\usetheme{default}
+\usecolortheme{dove}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\setbeamerfont{frametitle}{series=\bfseries}
+\setbeamertemplate{itemize items}[circle]
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\graphicspath{{../report/figures/}}
+\IfFileExists{../report/generated/macros.tex}{\input{../report/generated/macros.tex}}{%
+  \errmessage{run `python -m src.run_all` from the repo root first}}
+\newcommand{\gen}[1]{\input{../report/generated/#1.tex}}
+\newcommand{\fig}[2][0.55]{\includegraphics[width=\linewidth,height=#1\textheight,keepaspectratio]{#2}}
+\newcommand{\TeamAuthors}{Surname1, Name1 \and Surname2, Name2 \and Surname3, Name3}
+
+\title{Decision Trees and Pegasos SVMs from Scratch}
+\subtitle{Price and price-tier prediction on bina.az listings}
+\author{\TeamAuthors}
+\institute{MLE-AI-201 Machine Learning --- AI Academy}
+\date{}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+  \centering\small Code: \texttt{github.com/eyyubovsamur240-afk/ML-final-project} (tag \texttt{v1.0-final})
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{1. Problem and dataset}
+  \begin{columns}[T]
+    \column{0.5\textwidth}
+    \begin{itemize}
+      \item bina.az sale listings (Kaggle): \NRaw{} raw rows $\to$ \NClean{} clean
+      \item \textbf{Task A}: regression of $\log(\text{price})$ \\ (skewness \PriceSkew{} $\to$ \LogPriceSkew{} after the log)
+      \item \textbf{Task B}: premium vs.\ standard, split at the \emph{training} median (\TierThreshold{} AZN)
+      \item 70/15/15 split, stratified on price deciles: \NTrain{} / \NVal{} / \NTest
+      \item Tree and SVM are \textbf{our own NumPy code}; scikit-learn only as a baseline
+    \end{itemize}
+    \column{0.48\textwidth}
+    \fig[0.7]{eda_price_map}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{2. Cleaning, features and leakage}
+  \begin{columns}[T]
+    \column{0.52\textwidth}
+    \begin{itemize}\small
+      \item Azerbaijani column names $\to$ English; strings like ``85 m$^2$'', ``5 / 9'', ``1 250 000'' parsed
+      \item Prices converted to AZN at fixed rates (USD peg 1.70)
+      \item Duplicates and re-posts removed; fixed plausibility rules
+      \item \textbf{Leakage dropped:} \LeakageCols{} (both functions of price), plus identifiers and promo flags
+      \item Imputation, one-hot levels, scaling and the tier threshold are fitted on \textbf{train only}
+      \item \NFeatures{} features: size, floors, coordinates, distance to centre, flags, district one-hot
+    \end{itemize}
+    \column{0.46\textwidth}
+    \resizebox{\linewidth}{!}{\gen{tab_cleaning}}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{3. Our decision tree}
+  \begin{columns}[T]
+    \column{0.5\textwidth}
+    \begin{itemize}\small
+      \item Gini / entropy / MSE; gain $= I(p) - \sum_c \frac{N_c}{N} I(c)$
+      \item Exact, vectorised search: one sort per node, every threshold scored with cumulative sums
+    \end{itemize}
+    \column{0.5\textwidth}
+    \begin{itemize}\small
+      \item \texttt{max\_depth}, \texttt{min\_samples\_split/leaf}, \texttt{min\_impurity\_decrease}
+      \item Chosen on validation: A: depth \TreeRegDepth, leaf \TreeRegLeaf; B: \TreeClfCrit, depth \TreeClfDepth{} (Gini vs.\ entropy $\Delta$F1 = \CritDiff)
+    \end{itemize}
+  \end{columns}
+  \vspace{2pt}
+  \centering\fig[0.6]{tree_depth_curves}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{4. Our Pegasos SVM: regularisation and margin}
+  \begin{columns}[T]
+    \column{0.55\textwidth}
+    \small
+    $J(w)=\frac{\lambda}{2}\|w\|^2+\frac1n\sum_i\max(0,\,1-y_i w^\top x_i)$\\[3pt]
+    $w \leftarrow (1-\eta_t\lambda)\,w + \frac{\eta_t}{k}\sum_{i\in A_t^+} y_i x_i,\quad \eta_t = \frac{1}{\lambda t}$
+    \column{0.43\textwidth}
+    \begin{itemize}\small
+      \item Mini-batch \SVMBatch, projection, $t$-weighted averaging
+      \item $\lambda=\SVMLambda$: margin $2/\|w\|=\SVMMargin$, \SVMSVFrac{} support vectors
+    \end{itemize}
+  \end{columns}
+  \vspace{4pt}
+  \centering\fig[0.6]{svm_lambda_sweep}
+\end{frame}
+
+\begin{frame}{4b. Convergence and the RBF extension}
+  \begin{itemize}\small
+    \item $J$: \ObjFirst{} $\to$ \ObjPegasos, vs.\ LIBLINEAR's exact optimum \ObjLiblinear{} (gap \ObjGap)
+    \item Random Fourier features: $\phi(x)=\sqrt{2/D}\cos(Wx+c)$, then the same linear solver ($\gamma=\RFFGamma$, $D=\RFFD$)
+  \end{itemize}
+  \centering
+  \fig[0.36]{svm_convergence}\\
+  \fig[0.36]{svm_rff_study}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{5. Experimental setup}
+  \begin{itemize}
+    \item Every hyperparameter selected on \textbf{validation}; refit on train+val; \textbf{test scored once}
+    \item Uncertainty: \CVFolds-fold stratified CV (preprocessing refitted per fold) + bootstrap CIs
+    \item Task A: RMSE / MAE / $R^2$ on $\log$ price (+ AZN); Task B: P / R / F1, ROC-AUC, PR-AUC
+    \item Matched baselines: \texttt{DecisionTree*}, \texttt{SGDClassifier}(hinge), \texttt{LinearSVC}, \texttt{SVC}(RBF), with scaling inside a \texttt{Pipeline}
+    \item Seed 42 everywhere; \texttt{python -m src.run\_all} regenerates every number
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{6. Results}
+  \centering
+  \resizebox{0.8\linewidth}{!}{\gen{tab_headline}}
+  \vspace{0.6em}
+  \begin{itemize}\small
+    \item Our tree vs.\ sklearn: \RegGainMismatch{} gain mismatches, \RegAgreement{} test agreement (differences: \TreeGapCause)
+    \item Averaged Pegasos within \PegasosVsLiblinearFOneDiff{} F1 of LIBLINEAR; RFF \RFFVsLinearWord{} the linear SVM (\RFFMinusLinear{} F1)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{6b. One figure: the classifier is unsure only near the threshold}
+  \centering\fig[0.42]{results_roc_pr}
+  \begin{columns}[T]
+    \column{0.45\textwidth}
+    \fig[0.38]{error_tier_distance}
+    \column{0.5\textwidth}
+    \vspace{0.8em}
+    \NearThresholdErrShare{} of the tree's errors are listings within $\pm$10\% of the threshold price, a band
+    that holds only \NearThresholdRowShare{} of the test listings.
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{7. What the models use}
+  \begin{itemize}\small
+    \item Tree importances (MDI): \TopFeatReg
+    \item Largest linear-SVM weights (standardised): $+$ \SVMPosWeights; $-$ \SVMNegWeights
+  \end{itemize}
+  \centering\fig[0.62]{feature_importance}
+\end{frame}
+
+\begin{frame}{8. Where the models fail, and limitations}
+  \begin{columns}[T]
+    \column{0.5\textwidth}
+    \begin{itemize}\small
+      \item Luxury tail: the tree \TopDecileWord{} the top decile (\TopDecileBias{} log)
+      \item Sparse districts: MAE \SparseDistrictMAE{} vs.\ \DenseDistrictMAE{} in dense ones
+      \item Tier errors are near-ties at the threshold
+      \item Limitations: asking $\neq$ sale price; one snapshot (no time split); fixed cleaning rules; RFF depends on the seed; our tree is slower than Cython
+    \end{itemize}
+    \column{0.48\textwidth}
+    \fig[0.7]{error_by_price_decile}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{9. Bonus, contributions and next steps}
+  \begin{columns}[T]
+    \column{0.5\textwidth}
+    \begin{itemize}\small
+      \item Ridge (normal equations): RMSE \RidgeRMSE
+      \item Our random forest: \RFRMSE{} (sklearn \SkRFRMSE)
+      \item Our gradient boosting: \GBRMSE{} (sklearn \SkGBRMSE)
+    \end{itemize}
+    \column{0.5\textwidth}
+    \begin{itemize}\small
+      \item \textbf{Who did what:} \texttt{contribution\_report.md}
+      \item Next: time-based split, in-fold target encoding, quantile loss for the tail
+    \end{itemize}
+  \end{columns}
+  \vspace{2pt}
+  \centering\fig[0.55]{bonus_ensembles}
+\end{frame}
+
+\end{document}
