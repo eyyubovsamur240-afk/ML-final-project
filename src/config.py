@@ -94,3 +94,24 @@ FAST = {
     "n_boot": 100,
 }
 N_BOOT = 1_000              # bootstrap resamples for test-set confidence intervals
+
+# Model pairs whose test-set difference we test with a paired bootstrap:
+# (task, label, model A, model B). A key is "reg::<name>" or "clf::<name>".
+PAIRED_COMPARISONS = [
+    ("A", "Our tree vs sklearn tree", "reg::Ours: decision tree", "reg::sklearn DecisionTreeRegressor"),
+    ("A", "Our ridge vs sklearn ridge", "reg::Ours: ridge (bonus)", "reg::sklearn Ridge"),
+    ("A", "Our tree vs our ridge", "reg::Ours: decision tree", "reg::Ours: ridge (bonus)"),
+    ("B", "Our tree vs sklearn tree", "clf::Ours: decision tree", "clf::sklearn DecisionTreeClassifier"),
+    ("B", "Pegasos vs LinearSVC", "clf::Ours: linear SVM (Pegasos)", "clf::sklearn LinearSVC"),
+    ("B", "RFF SVM vs SVC (RBF)", "clf::Ours: RBF SVM (RFF + Pegasos)", "clf::sklearn SVC (RBF)"),
+    ("B", "RFF SVM vs Pegasos", "clf::Ours: RBF SVM (RFF + Pegasos)", "clf::Ours: linear SVM (Pegasos)"),
+    ("B", "Our tree vs RFF SVM", "clf::Ours: decision tree", "clf::Ours: RBF SVM (RFF + Pegasos)"),
+]
+# Bonus ensembles, tested on the same test rows.
+ENSEMBLE_PAIRS = [
+    ("A", "Our forest vs sklearn forest", "reg::Ours: random forest", "reg::sklearn RandomForest"),
+    ("A", "Our boosting vs sklearn boosting", "reg::Ours: gradient boosting", "reg::sklearn GradientBoosting"),
+    ("A", "Our forest vs our single tree", "reg::Ours: random forest", "reg::Ours: decision tree"),
+    ("B", "Our forest vs sklearn forest", "clf::Ours: random forest", "clf::sklearn RandomForest"),
+    ("B", "Our forest vs our single tree", "clf::Ours: random forest", "clf::Ours: decision tree"),
+]

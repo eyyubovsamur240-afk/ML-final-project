@@ -118,7 +118,7 @@
 \begin{frame}{5. Experimental setup}
   \begin{itemize}
     \item Every hyperparameter selected on \textbf{validation}; refit on train+val; \textbf{test scored once}
-    \item Uncertainty: \CVFolds-fold stratified CV (preprocessing refitted per fold) + bootstrap CIs
+    \item Uncertainty: \CVFolds-fold stratified CV (preprocessing refitted per fold) + bootstrap CIs + paired bootstrap tests between models
     \item Task A: RMSE / MAE / $R^2$ on $\log$ price (+ AZN); Task B: P / R / F1, ROC-AUC, PR-AUC
     \item Matched baselines: \texttt{DecisionTree*}, \texttt{SGDClassifier}(hinge), \texttt{LinearSVC}, \texttt{SVC}(RBF), with scaling inside a \texttt{Pipeline}
     \item Seed 42 everywhere; \texttt{python -m src.run\_all} regenerates every number
@@ -133,6 +133,7 @@
   \begin{itemize}\small
     \item Our tree vs.\ sklearn: \RegGainMismatch{} gain mismatches, \RegAgreement{} test agreement (differences: \TreeGapCause)
     \item Averaged Pegasos within \PegasosVsLiblinearFOneDiff{} F1 of LIBLINEAR; RFF \RFFVsLinearWord{} the linear SVM (\RFFMinusLinear{} F1)
+    \item Paired bootstrap on the test rows: \PairedNOursVsSkSig{} of \PairedNOursVsSk{} ours-vs-sklearn gaps are significant; tree $-$ sklearn RMSE \PairedAOurTreeVsSklearnTreeRMSEDiff{} \PairedAOurTreeVsSklearnTreeRMSECI
   \end{itemize}
 \end{frame}
 

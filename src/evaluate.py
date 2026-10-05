@@ -158,6 +158,32 @@ def bootstrap_ci(metric, *arrays, n_boot: int = 1000, alpha: float = 0.05, seed:
     return float(lo), float(hi)
 
 
+def paired_bootstrap(metric, y_true, out_a, out_b, n_boot: int = 1000, alpha: float = 0.05,
+                     seed: int = 42) -> dict:
+    """
+    Paired percentile bootstrap of d = metric(y, out_a) - metric(y, out_b).
+
+    Both models are scored on the SAME resampled test rows in every replicate, so
+    the noise they share (hard rows, lucky rows) cancels in d. This is much tighter
+    than comparing two separate CIs. ``p`` is the two-sided bootstrap p-value
+    2 * min(P(d* <= 0), P(d* >= 0)); the difference is called significant when the
+    (1 - alpha) CI of d excludes 0.
+    """
+    y_true, out_a, out_b = np.asarray(y_true), np.asarray(out_a), np.asarray(out_b)
+    rng = np.random.default_rng(seed)
+    n = len(y_true)
+    diffs = np.empty(n_boot)
+    for b in range(n_boot):
+        idx = rng.integers(0, n, n)
+        diffs[b] = metric(y_true[idx], out_a[idx]) - metric(y_true[idx], out_b[idx])
+    diffs = diffs[np.isfinite(diffs)]
+    a, b_ = metric(y_true, out_a), metric(y_true, out_b)
+    lo, hi = np.percentile(diffs, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    p = min(1.0, 2 * min(np.mean(diffs <= 0), np.mean(diffs >= 0)))
+    return {"a": float(a), "b": float(b_), "diff": float(a - b_), "ci": (float(lo), float(hi)),
+            "p": float(p), "significant": bool(lo > 0 or hi < 0)}
+
+
 def mean_std(dicts: list[dict]) -> dict:
     """{metric: (mean, std)} across CV folds."""
     keys = dicts[0].keys()

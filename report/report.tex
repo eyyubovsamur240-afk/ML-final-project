@@ -329,8 +329,9 @@ in code (best validation score, ties to the simpler model).
 (2) The chosen configurations are refitted on train+validation
 (\NDev{} rows) with imputation, encoding, scaling and the tier threshold
 re-learned on those rows (threshold \TierThresholdDev{} AZN), and scored
-once on the test split with 95\% percentile-bootstrap intervals (1{,}000
-resamples). (3) For uncertainty, \CVFolds-fold stratified CV on
+once on the test split with 95\% percentile-bootstrap intervals (\NBoot{}
+resamples). Differences between two models are tested with a \emph{paired}
+bootstrap on the same resampled test rows (Section~\ref{sec:paired}). (3) For uncertainty, \CVFolds-fold stratified CV on
 train+validation repeats the whole preprocessing inside every fold and
 reports mean$\pm$std.
 
@@ -506,6 +507,57 @@ the main practical argument for RFF.
   \label{tab:tree-compare}
   \fit{\gen{tab_tree_compare}}
 \end{table}
+
+\subsection{Are the differences real?}\label{sec:paired}
+Several gaps in Tables~\ref{tab:reg} and~\ref{tab:clf} are in the third
+decimal, and a single test split could produce them by chance. To check,
+we resample the \NTest{} test rows with replacement \NBoot{} times and
+score \emph{both} models of a pair on the same resample. Rows that are
+hard for one model are usually hard for the other, so this shared noise
+cancels in the difference, and its interval is much narrower than the two
+per-model intervals in Tables~\ref{tab:reg}--\ref{tab:clf} would suggest.
+A difference counts as real when its 95\% percentile interval excludes
+zero; $p$ is the two-sided bootstrap $p$-value
+$2\min\{P(d^*\le 0),P(d^*\ge 0)\}$ (\texttt{evaluate.paired\_bootstrap}).
+
+Table~\ref{tab:paired} lists all \PairedN{} comparisons, of which
+\PairedNSig{} are significant, including \PairedNOursVsSkSig{} of the
+\PairedNOursVsSk{} comparisons of our code with scikit-learn.
+\emph{Task~A:} our tree's test RMSE minus scikit-learn's is
+\PairedAOurTreeVsSklearnTreeRMSEDiff{} \PairedAOurTreeVsSklearnTreeRMSECI{}
+(\PairedAOurTreeVsSklearnTreeRMSEWord), and our forest's minus
+scikit-learn's is \PairedAOurForestVsSklearnForestRMSEDiff{}
+\PairedAOurForestVsSklearnForestRMSECI{}
+(\PairedAOurForestVsSklearnForestRMSEWord). The forest's gain over our
+single tree is \PairedAOurForestVsOurSingleTreeRMSEDiff{}
+\PairedAOurForestVsOurSingleTreeRMSECI{}
+(\PairedAOurForestVsOurSingleTreeRMSEWord).
+\emph{Task~B:} averaged Pegasos minus LIBLINEAR is
+\PairedBPegasosVsLinearSVCFOneDiff{} F1 \PairedBPegasosVsLinearSVCFOneCI{}
+(\PairedBPegasosVsLinearSVCFOneWord), and the RFF SVM minus the exact
+kernel SVC is \PairedBRFFSVMVsSVCRBFAUCDiff{} ROC-AUC
+\PairedBRFFSVMVsSVCRBFAUCCI{} (\PairedBRFFSVMVsSVCRBFAUCWord). The
+kernel's gain over the linear SVM is \PairedBRFFSVMVsPegasosFOneDiff{} F1
+(\PairedBRFFSVMVsPegasosFOneWord) and \PairedBRFFSVMVsPegasosAUCDiff{}
+ROC-AUC (\PairedBRFFSVMVsPegasosAUCWord). Our tree minus the RFF SVM is
+\PairedBOurTreeVsRFFSVMFOneDiff{} F1 (\PairedBOurTreeVsRFFSVMFOneWord)
+and \PairedBOurTreeVsRFFSVMAUCDiff{} ROC-AUC
+(\PairedBOurTreeVsRFFSVMAUCWord), so the ``tree wins F1, SVM wins AUC''
+split can be read off with its uncertainty. A significant difference is
+not automatically a meaningful one: with \NTest{} rows, gaps of a few
+thousandths of RMSE can be detected but are far below what a buyer would
+notice.
+
+\begin{table*}[tp]
+  \centering
+  \caption{Paired bootstrap comparisons on the test split. Difference =
+  first $-$ second (lower is better for RMSE, higher for F1 and ROC-AUC;
+  $R^2$ is omitted because on a fixed test sample it is a monotone function
+  of RMSE), with its 95\% percentile interval over \NBoot{} resamples of
+  the test rows. ``No real difference'': the interval contains~0.}
+  \label{tab:paired}
+  \fit{\gen{tab_paired}}
+\end{table*}
 
 \subsection{Error analysis}
 \emph{What the models use.} Our tree's impurity-based importances
