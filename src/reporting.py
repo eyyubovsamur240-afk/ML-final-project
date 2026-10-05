@@ -158,6 +158,26 @@ def _verdicts(T: TexWriter, R: dict) -> None:
     quarter = auc_[D_ <= D_.max() / 4]
     sat = len(quarter) and (auc_.max() - quarter.max()) < 0.005
     T.macro("RFFDVerdict", "saturates well before the largest $D$" if sat else "keeps improving up to the largest $D$")
+    grid = R["svm"]["rff_grid"]
+    g_vals = sorted({r["gamma"] for r in grid})
+    l_vals = sorted({r["lambda_"] for r in grid})
+    br = R["svm"]["best_rff"]
+    edges = []
+    if br["gamma"] == g_vals[0]:
+        edges.append("the smallest bandwidth $\\gamma$")
+    elif br["gamma"] == g_vals[-1]:
+        edges.append("the largest bandwidth $\\gamma$")
+    if br["lambda_"] == l_vals[0]:
+        edges.append("the weakest regularisation $\\lambda$")
+    elif br["lambda_"] == l_vals[-1]:
+        edges.append("the strongest regularisation $\\lambda$")
+    if edges:
+        note = ("Validation picks " + " and ".join(edges) + " in the grid"
+                + (": the RBF kernel prefers to be nearly linear on these features, so the extension adds little over the linear SVM."
+                   if br["gamma"] == g_vals[0] else ", so the optimum may lie just outside it."))
+    else:
+        note = "Both selected values lie inside the grid."
+    T.macro("RFFGridNote", note)
     dr = R["analysis"]["decile_residuals"]["Our tree"]
     T.macro("TopDecileWord", "under-predicts" if dr[-1] < 0 else "over-predicts")
     T.macro("BottomDecileWord", "over-predicts" if dr[0] > 0 else "under-predicts")
