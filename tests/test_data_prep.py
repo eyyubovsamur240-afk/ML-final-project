@@ -38,6 +38,12 @@ def test_parse_floor_land_yes_no_currency():
     assert dp.parse_currency(None, "120 000") == "AZN"
 
 
+def test_yes_no_ignores_unknown_li_lu_words():
+    assert dp.parse_yes_no("Çıxarışlı") == 1.0 and dp.parse_yes_no("İpotekalı") == 1.0
+    for word in ("Nəsimli", "bilmirəmli", "qonşulu", "Yasamal, Elmli"):
+        assert np.isnan(dp.parse_yes_no(word)), word
+
+
 def test_extract_district_from_location_tags():
     assert dp.extract_district("Qara Qarayev m.* Nizami r.* 8-ci kilometr q.", "Qara Qarayev m.") == "nizami r."
     assert dp.extract_district(None, "Səbail r.") == "sebail r."
@@ -94,6 +100,15 @@ def test_clean_keeps_latest_scrape_and_scope(cleaned):
     assert "listing_key" in log.dropped_columns["identifiers"]
     assert df["district"].notna().mean() > 0.9
     assert df["repair"].isin([0.0, 1.0]).mean() > 0.9   # parsed from "var"/"yoxdur"
+
+
+def test_rows_without_listing_url_are_not_merged():
+    raw = make_fake_binaaz(400, seed=3)
+    raw = raw.drop_duplicates(subset="estate_rel_url_x").reset_index(drop=True)
+    raw.loc[:49, "estate_rel_url_x"] = [np.nan] * 25 + [" "] * 25
+    log = dp.CleaningLog()
+    dp.clean(raw, log)
+    assert dict(log.steps)["repeat scrapes of a listing removed (latest kept)"] == len(raw)
 
 
 def test_clean_rules_hold(cleaned):
