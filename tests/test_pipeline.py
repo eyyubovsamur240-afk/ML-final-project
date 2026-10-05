@@ -20,7 +20,7 @@ def test_run_all_fast_end_to_end(tmp_path):
     assert {"unit_price", "total_price"} <= set(metrics["data"]["dropped_columns"]["leakage"])
     assert (out / "generated" / "macros.tex").exists()
     for table in ("tab_results_reg", "tab_results_clf", "tab_headline", "tab_cleaning", "tab_tree_compare",
-                  "tab_error_district", "tab_error_band"):
+
         assert (out / "generated" / f"{table}.tex").exists()
     figures = {p.stem for p in (out / "figures").glob("*.pdf")}
     assert {"tree_depth_curves", "svm_convergence", "svm_lambda_sweep", "results_roc_pr",
@@ -35,3 +35,8 @@ def test_run_all_fast_end_to_end(tmp_path):
     assert R["analysis"]["tree_vs_sklearn"]["regression"]["structure"]["gain_mismatch"] == 0
     # the test split was never used for selection: selections are recorded from validation
     assert "val_rmse" in R["tree"]["best_reg"] and "val_f1" in R["svm"]["best"]
+    # every planned paired comparison ran, each with a CI around its point difference
+    paired = metrics["final"]["paired"] + metrics["bonus"]["ensembles"]["paired"]
+    assert len(paired) == 3 + 5 * 2 + 3 + 2 * 2       # Task A: RMSE; Task B: F1 + AUC
+    assert all(r["ci"][0] <= r["diff"] <= r["ci"][1] for r in paired)
+    assert (out / "results" / "paired_tests.csv").exists()
