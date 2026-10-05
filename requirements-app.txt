@@ -1,0 +1,8 @@
+# Web interface (app/). The models themselves only need requirements.txt.
+-r requirements.txt
+fastapi==0.115.0
+starlette==0.38.6
+pydantic==2.13.5
+uvicorn==0.30.6
+anyio==4.6.0           # newer anyio warns inside starlette 0.38's test client
+httpx==0.27.2          # FastAPI TestClient, tests only

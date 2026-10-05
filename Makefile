@@ -2,7 +2,7 @@
 PY ?= python
 LATEX ?= pdflatex -interaction=nonstopmode -halt-on-error
 
-.PHONY: help setup test fast all report slides clean
+.PHONY: help setup test fast all report slides clean app-setup app-train app docker
 
 help:
 	@echo "make setup   - create .venv and install pinned requirements"
@@ -11,6 +11,7 @@ help:
 	@echo "make all     - reproduce every number and figure (python -m src.run_all)"
 	@echo "make report  - build report/report.pdf (run 'make all' first)"
 	@echo "make slides  - build presentation/slides.pdf (run 'make all' first)"
+	@echo "make app-train / app / docker - train and serve the web interface"
 
 setup:
 	python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -34,3 +35,15 @@ clean:
 	rm -rf results report/generated report/figures/*.pdf
 	cd report && rm -f *.aux *.log *.out
 	cd presentation && rm -f *.aux *.log *.out *.nav *.snm *.toc *.vrb
+
+app-setup:
+	.venv/bin/pip install -r requirements-app.txt
+
+app-train:
+	$(PY) -m app.train
+
+app:
+	$(PY) -m uvicorn app.main:app --port 8000
+
+docker:
+	docker build -t binaaz-estimator . && docker run --rm -p 8000:8000 -v "$(CURDIR)/models:/app/models:ro" binaaz-estimator
