@@ -203,7 +203,9 @@ to the Baku centre, repair/mortgage/bill-of-sale flags and six keyword
 flags from the description, e.g.\ ``metro'' or ``d\schwa{}niz'' (sea)), plus
 one-hot encodings of category, building type, city, administrative district
 (parsed from bina.az's location tags) and the finer location label (metro
-station or settlement), \NFeatures{} columns in total. One-hot rather than ordinal encoding is
+station or settlement), plus one 0/1 column per location tag (metro
+station, settlement or landmark listed on the ad) that appears in at least
+20 \emph{training} rows, \NFeatures{} columns in total. One-hot rather than ordinal encoding is
 used because none of these has a natural order. Missing numeric values are
 imputed with the \emph{training} median and flagged by an indicator, and
 a category level gets its own column only if it has at least 20
@@ -212,6 +214,12 @@ a category level gets its own column only if it has at least 20
 Task~A predicts $\log(\text{price})$: the raw price is strongly
 right-skewed (skewness \PriceSkew; \LogPriceSkew{} after the log,
 Fig.~\ref{fig:eda}a--b), and an error in $\log$ space is a relative error.
+The tree-based regressors (our tree, scikit-learn's, and the forest and
+boosting bonuses) are fit to $\log(\text{price}/\text{m}^2)=\log(\text{price})-\log(\text{area})$
+and add the listing's own $\log(\text{area})$ back, so they still output
+$\log(\text{price})$ and are scored on it. A leaf then holds a price per
+m$^2$ that each flat's exact area scales, instead of one price for every
+flat in the leaf. The offset is the row's own feature, so nothing leaks.
 Task~B labels a listing \emph{premium} if its price exceeds the
 \emph{training} median, \TierThreshold{} AZN. The split is 70/15/15
 (\NTrain/\NVal/\NTest), stratified on deciles of $\log(\text{price})$ with

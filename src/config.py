@@ -46,6 +46,7 @@ BAKU_BBOX = {"lat": (40.25, 40.65), "lng": (49.60, 50.40)}   # map zoom (Abshero
 # --- Feature encoding -----------------------------------------------------------
 MIN_CATEGORY_COUNT = 20     # a level needs >= this many TRAIN rows to get its own column
 MAX_CATEGORY_LEVELS = 60    # cap per categorical column; rarer levels -> "other"
+MAX_TAG_LABELS = 200        # cap on location-tag columns (metro, settlement, landmark)
 
 # --- Split ----------------------------------------------------------------------
 VAL_SIZE = 0.15
@@ -54,6 +55,10 @@ N_STRATA = 10               # stratify on deciles of log(price) -> also balances
 CV_FOLDS = 5
 
 # --- Hyperparameter grids (selection uses the VALIDATION split only) -----------
+# Tree-based regressors learn log(price per m²) and add log(area) back (see
+# experiments.PerM2Target). Validation RMSE(log): single tree 0.2286 -> 0.2221.
+PER_M2_TARGET = True
+
 TREE_DEPTHS = list(range(1, 26))
 TREE_MIN_LEAF_GRID = [1, 2, 5, 10, 20, 50, 100, 200]
 TREE_MIN_DECREASE_GRID = [0.0, 1e-5, 1e-4, 1e-3, 1e-2]
@@ -63,14 +68,15 @@ SVM_LAMBDAS = [1e-6, 3e-6, 1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1]
 SVM_EPOCHS = 50
 SVM_BATCH = 32
 SVM_AVERAGE = True          # t-weighted iterate averaging (see src/svm.py)
-RFF_GAMMAS = [0.003, 0.01, 0.03, 0.1]          # RBF bandwidth k(x,z)=exp(-g||x-z||^2)
+RFF_GAMMAS = [0.001, 0.003, 0.01, 0.03]           # RBF bandwidth k(x,z)=exp(-g||x-z||^2); 0.001 wins with the ~300 tag-augmented features
 RFF_LAMBDAS = [1e-6, 1e-5, 1e-4, 1e-3]
 RFF_COMPONENTS = 1024
 RFF_COMPONENT_GRID = [32, 64, 128, 256, 512, 1024, 2048]
 
 RIDGE_ALPHAS = [1e-3, 1e-2, 1e-1, 1, 10, 100, 1000]
 
-FOREST_TREES = 40
+FOREST_TREES = 60           # val RMSE(log): 0.188 (40 trees, min leaf 2, log price) -> 0.180 (100 trees, leaf 1, per m²); 60 keeps run time sane
+FOREST_MIN_LEAF = 1
 BOOST_TREES = 120
 BOOST_LR = 0.15
 BOOST_DEPTH = 4
