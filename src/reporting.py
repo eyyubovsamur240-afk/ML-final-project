@@ -790,7 +790,8 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
                   "WorstClusterMAE", "WorstClusterID", "BestClusterMAE"):
             T.macro(k, "--")
         T.table("tab_bonus", "(bonus experiments skipped)")
-
+    paired = _write_paired(T, R)
+    _explain(T, R)
     _verdicts(T, R)
     T.macro("RunMode", "fast smoke-test" if R["settings"]["fast"] else "full")
     T.flush()
