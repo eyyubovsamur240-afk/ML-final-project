@@ -15,6 +15,7 @@ Stages (see src/experiments.py for the protocol):
   6. k-fold CV on train+val for mean ± std (all models, sklearn baselines too)
   7. benchmark details + error analysis
   8. bonuses: ridge, random forest / gradient boosting from our trees, k-means, PCA
+     then permutation importance per model + error breakdown by district / price band
   9. write results/ (json, csv) and report/generated/ (LaTeX macros + tables)
 
 Everything is deterministic (config.SEED everywhere).
@@ -33,7 +34,7 @@ from . import config, plots
 from . import data_prep as dp
 from . import evaluate as ev
 from . import experiments as ex
-from . import reporting
+from . import explain, reporting
 
 
 def file_sha256(path: Path) -> str:
@@ -129,6 +130,11 @@ def main(argv=None) -> dict:
         ex.log_step("Bonus: k-means + PCA")
         uns = ex.bonus_unsupervised(data, s, fin, R["tree"])
         R["bonus"] = {"ensembles": ens, "unsupervised": uns}
+
+    # 8b. explanations -------------------------------------------------------------------------
+    ex.log_step("Feature importance (permutation) and error breakdown by district / price band")
+    extra = R["bonus"]["ensembles"]["_models"] if "bonus" in R else None
+    R["explain"] = explain.run(data, s, fin, extra, n_repeats=s.perm_repeats)
 
     # 9. outputs -----------------------------------------------------------------------------
     R["runtime_s"] = time.perf_counter() - t_start
