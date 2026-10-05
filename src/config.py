@@ -75,6 +75,16 @@ BOOST_TREES = 120
 BOOST_LR = 0.15
 BOOST_DEPTH = 4
 
+# Bonus: from-scratch SVR (epsilon-insensitive Pegasos, src/svr.py), Task A.
+SVR_LAMBDAS = [1e-6, 1e-5, 1e-4, 1e-3]
+SVR_EPSILONS = [0.0, 0.1]          # tube half-width in log(price) units (0.1 ~ 10%)
+SVR_EPOCHS = 20
+SVR_RFF_GAMMAS = [0.001, 0.003, 0.01]
+SVR_RFF_LAMBDAS = [1e-6, 1e-5]
+
+# Fit-time scaling study (src/scaling.py): nested fractions of the training split.
+SCALING_FRACTIONS = [0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0]
+
 KMEANS_K_GRID = list(range(2, 21))
 KMEANS_K = 12
 
@@ -92,5 +102,8 @@ FAST = {
     "boost_trees": 25,
     "cv_folds": 3,
     "n_boot": 100,
+    "scaling_fractions": [0.25, 0.5, 1.0],
+    "svr_lambdas": [1e-5, 1e-4],
+    "svr_rff_gammas": [0.01],
 }
 N_BOOT = 1_000              # bootstrap resamples for test-set confidence intervals
