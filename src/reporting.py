@@ -20,6 +20,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from . import config
+from .data_prep import normalize_name
+
 
 # --------------------------------------------------------------------------- utils
 def to_jsonable(obj):
@@ -248,6 +251,12 @@ def _verdicts(T: TexWriter, R: dict) -> None:
 
 
 # --------------------------------------------------------------------------- tables
+def scope_dropped_categories(counts: dict | None) -> str:
+    """'torpaq 3,315, obyekt 2,526' for the categories outside config.KEEP_CATEGORIES."""
+    kept = {normalize_name(c) for c in (config.KEEP_CATEGORIES or [])}
+    return ", ".join(f"{k} {v:,}" for k, v in (counts or {}).items() if normalize_name(k) not in kept) or "none"
+
+
 def _tabular(cols: str, header: list[str], rows: list[list[str]], size=r"\footnotesize") -> str:
     out = [size, f"\\begin{{tabular}}{{{cols}}}", r"\toprule", " & ".join(header) + r" \\", r"\midrule"]
     for r in rows:
@@ -300,10 +309,7 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
     sp = data.get("scrape_period") or ["--", "--"]
     T.macro("ScrapeStart", tex_escape(sp[0]))
     T.macro("ScrapeEnd", tex_escape(sp[1]))
-    cbs = data.get("category_counts_before_scope") or {}
-    T.macro("ScopeDroppedCats", tex_escape(", ".join(f"{k} {v:,}" for k, v in cbs.items()
-                                                     if k not in ("yeni tikili", "kohne tikili", "heyet evi/bag evi")))
-            or "none")
+    T.macro("ScopeDroppedCats", tex_escape(scope_dropped_categories(data.get("category_counts_before_scope"))))
     T.macro("CurrencyBreakdown", tex_escape(", ".join(f"{k} {v:,}" for k, v in cur.items())))
     T.macro("CurrencySentence", "every price is already in AZN" if set(cur) <= {"AZN"} else
             "prices come in several currencies (" + tex_escape(", ".join(f"{k} {v:,}" for k, v in cur.items())) + ")")
@@ -642,8 +648,6 @@ if __name__ == "__main__":
     # Rebuild the LaTeX macros/tables from a saved metrics.json without re-running experiments:
     #   python -m src.reporting [results/metrics.json] [report/generated]
     import sys
-
-    from . import config
 
     src = Path(sys.argv[1]) if len(sys.argv) > 1 else config.RESULTS_DIR / "metrics.json"
     dst = Path(sys.argv[2]) if len(sys.argv) > 2 else config.GENERATED_TEX_DIR
