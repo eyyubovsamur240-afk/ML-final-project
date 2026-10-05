@@ -162,7 +162,7 @@ into one contribution per factor (tree-path decomposition).
 
 ```bash
 pip install -r requirements-app.txt
-python -m app.train                     # once, ~6 min: writes models/predictor.pkl (git-ignored)
+python -m app.train                     # once, ~25 min: writes models/predictor.pkl (~190 MB, git-ignored)
 uvicorn app.main:app --port 8000        # open http://localhost:8000  (API docs: /docs)
 ```
 
