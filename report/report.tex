@@ -151,8 +151,7 @@ We use the Kaggle \emph{Bina.az sale project} dump~\cite{data} (file
 between \ScrapeStart{} and \ScrapeEnd. Column names are Azerbaijani
 (\emph{Sah\schwa{}}, \emph{Otaq say\i}, \emph{M\schwa{}rt\schwa{}b\schwa{}},
 \ldots), most numbers arrive as strings with units (``145~m$^2$'', ``7 / 9'',
-``2~640 AZN/m$^2$'') and every price carries a currency field
-(\CurrencyBreakdown). All cleaning lives in \texttt{src/data\_prep.py}:
+``2~640 AZN/m$^2$''), and \CurrencySentence. All cleaning lives in \texttt{src/data\_prep.py}:
 \begin{enumerate}\setlength\itemsep{0pt}
   \item names are transliterated and mapped to English (\emph{area, rooms,
         floor, land area, repair, mortgage, bill of sale, category}); where the
@@ -191,8 +190,9 @@ estimated on the data, so applying them before the split cannot leak.
 arithmetic functions of the target (price per m$^2$, price restated);
 the cleaning code also drops any other column whose name contains
 ``price''. We also drop identifiers and free-form addresses
-(\IdentifierCols) and platform promotion flags (\MetaCols), which describe
-the seller's advertising budget rather than the property. Price per m$^2$
+(\IdentifierCols) and promotion flags plus scrape bookkeeping
+(\MetaCols), which describe the seller's advertising or the scraper rather
+than the property. Price per m$^2$
 is used once, only as a typo filter, and never as a feature.
 
 \subsection{Features, tasks and split}
@@ -448,8 +448,8 @@ $\log$ space: the single tree \TreeVsRidgeWord{} it. \emph{Task~B:} the
 best of our models is \BestOurClf{} (F1 \BestOurClfFOne),
 \BestOverallClause. The better of our two SVMs \SVMVsTreeWord{} our tree,
 and the RFF kernel \RFFVsLinearWord{} the linear SVM (test F1
-\RFFMinusLinear).
-Averaged Pegasos is within \PegasosVsLiblinearFOneDiff{} F1 of LIBLINEAR.
+\RFFMinusLinear). \AUCContrastSentence{} Averaged Pegasos reaches F1
+\OurSVMFOne{} against \SkLinSVCFOne{} for LIBLINEAR on the same objective.
 
 \begin{table*}[tp]
   \centering
@@ -565,7 +565,10 @@ notice.
 \TopFeatClf{} for Task~B. Size and location dominate, which matches the
 EDA. In the linear SVM (Fig.~\ref{fig:weights}), whose weights are comparable because the
 features are standardised, the largest positive weights are
-\SVMPosWeights{} and the most negative are \SVMNegWeights.
+\SVMPosWeights{} and the most negative are \SVMNegWeights. Correlated
+features share their effect (area and $\log$ area enter together), so a
+single weight, such as a negative one on raw area next to a large positive
+one on $\log$ area, must not be read in isolation.
 
 \emph{Where the regression fails.}
 (i) \emph{Luxury and bargain outliers.} The tree \TopDecileWord{} the top
@@ -683,8 +686,8 @@ signal, but it would also need care to avoid prices written in the text.
 Both from-scratch models behave as specified: the tree matches
 scikit-learn's split at every node up to ties and float32 effects, and
 Pegasos reaches LIBLINEAR's objective up to \ObjGap. Both are
-competitive on real, messy data. Most of the work, and most of the error, lies in the data: currency
-quirks, duplicates, sparse districts and the luxury tail. Next steps are
+competitive on real, messy data. Most of the work, and most of the error, lies in the data: repeated
+scrapes, duplicates, sparse districts and the luxury tail. Next steps are
 a time-based split, district-level target encoding learned inside the
 folds, quantile losses for the tails, and histogram-based split finding
 to close the speed gap.

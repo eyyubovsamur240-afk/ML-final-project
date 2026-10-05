@@ -48,6 +48,30 @@ make report slides        # -> report/report.pdf, presentation/slides.pdf
 
 All three output folders are git-ignored: they are regenerated from a clean checkout.
 
+## Results on the real data
+
+From `python -m src.run_all` on `house_sale.csv` (SHA-256 `b6a4c67e0d3c…`): 100,775 raw rows →
+57,721 residential listings, split 40,405 / 8,658 / 8,658; premium threshold
+208,000 AZN (training median). Full tables, figures and analysis: `report/report.pdf`.
+
+| Model | Task A: test RMSE of log(price) (5-fold CV) | Task B: test F1 (5-fold CV) |
+|---|---|---|
+| Our decision tree | 0.229 (0.239 ± 0.004) | 0.926 (0.923 ± 0.003) |
+| sklearn DecisionTree* | 0.229 | 0.928 |
+| Our linear SVM (Pegasos) | – | 0.912 (0.911 ± 0.004) |
+| sklearn LinearSVC | – | 0.911 |
+| Our RBF SVM (RFF + Pegasos) | – | 0.914 |
+| sklearn SVC (RBF) | – | 0.918 |
+| Our ridge (bonus) | 0.237 | – |
+| Our random forest (bonus) | 0.180 (sklearn 0.181) | 0.945 (sklearn 0.944) |
+| Constant baseline (train median) | 0.628 | – |
+
+* Our tree makes the same split as scikit-learn at every node except exact ties and float32 effects
+  (0 unexplained differences); averaged Pegasos reaches LIBLINEAR's objective within 0.61%.
+* Errors are largest for houses/villas, for districts with few listings, and in both price tails.
+  Tier errors concentrate at the boundary: 42% of the tree's misclassifications are listings
+  priced within ±10% of the threshold, a band holding only 11% of test listings.
+
 ---
 
 ## Repository layout

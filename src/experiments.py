@@ -617,10 +617,15 @@ def analysis(data: Data, s: Settings, fin: dict) -> dict:
         collapsed = int(sum(len(np.unique(X0[:, j])) - len(np.unique(X0[:, j].astype(np.float32)))
                             for j in range(X0.shape[1])))
         imp_corr = float(np.corrcoef(ours.feature_importances_, sk.feature_importances_)[0, 1])
+        root_same_partition = None
+        if not ours.root.is_leaf() and sk.tree_.node_count > 1:
+            lo = X0[:, ours.root.feature] <= ours.root.threshold
+            ls = X0.astype(np.float32).astype(np.float64)[:, sk.tree_.feature[0]] <= float(sk.tree_.threshold[0])
+            root_same_partition = bool(np.array_equal(lo, ls))
         comp[task] = dict(structure=st, test_agreement=agree, ours_depth=ours.get_depth(),
                           sk_depth=int(sk.get_depth()), ours_leaves=ours.get_n_leaves(),
                           sk_leaves=int(sk.get_n_leaves()), importance_corr=imp_corr,
-                          float32_collapsed_values=collapsed,
+                          float32_collapsed_values=collapsed, root_same_partition=root_same_partition,
                           root_ours=(names[ours.root.feature], ours.root.threshold) if not ours.root.is_leaf() else None,
                           root_sk=(names[sk.tree_.feature[0]], float(sk.tree_.threshold[0])) if sk.tree_.node_count > 1 else None)
     res["tree_vs_sklearn"] = comp
