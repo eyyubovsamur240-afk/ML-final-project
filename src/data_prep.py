@@ -95,6 +95,8 @@ BINARY_FEATURES = [
     "kw_metro", "kw_sea", "kw_furnished", "kw_urgent", "kw_euro_reno", "kw_parking",
 ]
 CATEGORICAL_FEATURES = ["category", "building_type", "city", "district", "location"]
+# Multi-label columns ('|'-joined strings): one 0/1 column per frequent label.
+MULTILABEL_FEATURES = ["tags"]
 # Missing-indicator columns are added only for these base features (derived
 # columns such as floor_ratio are missing exactly when their base is).
 INDICATOR_FEATURES = ["rooms", "floor", "total_floors", "lat", "repair"]
@@ -370,6 +372,18 @@ def extract_district(extra_info, location) -> str | float:
     return np.nan
 
 
+def extract_tags(extra_info, location) -> str:
+    """All of bina.az's location tags (metro 'm.', settlement 'q.', district 'r.',
+    landmarks) as a '|'-joined string: 'Qara Qarayev m.* Nizami r.' ->
+    'qara qarayev m.|nizami r.'. The district alone is too coarse; the metro
+    station and settlement pin a listing down much more finely."""
+    for text in (extra_info, location):
+        if isinstance(text, str) and text.strip():
+            toks = [transliterate(t).strip() for t in text.split("*")]
+            return "|".join(sorted({t for t in toks if t}))
+    return ""
+
+
 def clean(df: pd.DataFrame, log: CleaningLog | None = None) -> pd.DataFrame:
     """
     Clean the raw frame (row-wise rules only — nothing is learned here):
@@ -444,6 +458,7 @@ def clean(df: pd.DataFrame, log: CleaningLog | None = None) -> pd.DataFrame:
     extra = df["extra_info"] if "extra_info" in df else pd.Series([None] * len(df), index=df.index)
     loc_raw = df["location"] if "location" in df else pd.Series([None] * len(df), index=df.index)
     out["district"] = [extract_district(e, l) for e, l in zip(extra, loc_raw)]
+    out["tags"] = [extract_tags(e, l) for e, l in zip(extra, loc_raw)]
     out["description"] = df["description"].fillna("") if "description" in df else ""
 
     # --- 3. scope, target & core feature must exist ------------------------------
@@ -540,8 +555,14 @@ def make_features(df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, list[str]
         f[name] = desc_t.map(lambda s, ws=words: float(any(w in s for w in ws)))
     for c in CATEGORICAL_FEATURES:
         f[c] = df[c]
-    cols = NUMERIC_FEATURES + BINARY_FEATURES + CATEGORICAL_FEATURES
+    for c in MULTILABEL_FEATURES:
+        f[c] = df[c] if c in df else ""
+    cols = NUMERIC_FEATURES + BINARY_FEATURES + CATEGORICAL_FEATURES + MULTILABEL_FEATURES
     return f[cols], df["price_azn"].to_numpy(dtype=float), cols
+
+
+def _split_labels(col: pd.Series) -> pd.Series:
+    return col.fillna("").astype(str).map(lambda s: [t for t in s.split("|") if t])
 
 
 class Preprocessor:
@@ -554,18 +575,23 @@ class Preprocessor:
       * categoricals: one-hot for levels with >= ``min_count`` TRAIN rows
         (top ``max_levels``); everything else -> "<col>=other". One-hot (not
         ordinal) because district/category have no natural order; trees can
-        still isolate a single level with one split.
+        still isolate a single level with one split,
+      * multi-label columns ('|'-joined): one 0/1 column per label that
+        appears in >= ``min_count`` TRAIN rows (top ``max_labels``).
     """
 
     def __init__(self, numeric=None, binary=None, categorical=None, indicators=None,
-                 min_count: int = config.MIN_CATEGORY_COUNT,
-                 max_levels: int = config.MAX_CATEGORY_LEVELS):
+                 multilabel=None, min_count: int = config.MIN_CATEGORY_COUNT,
+                 max_levels: int = config.MAX_CATEGORY_LEVELS,
+                 max_labels: int = config.MAX_TAG_LABELS):
         self.numeric = list(numeric if numeric is not None else NUMERIC_FEATURES)
         self.binary = list(binary if binary is not None else BINARY_FEATURES)
         self.categorical = list(categorical if categorical is not None else CATEGORICAL_FEATURES)
         self.indicators = list(indicators if indicators is not None else INDICATOR_FEATURES)
+        self.multilabel = list(multilabel if multilabel is not None else MULTILABEL_FEATURES)
         self.min_count = min_count
         self.max_levels = max_levels
+        self.max_labels = max_labels
 
     def fit(self, df: pd.DataFrame) -> "Preprocessor":
         cont = self.numeric + self.binary
@@ -578,11 +604,18 @@ class Preprocessor:
             counts = df[c].dropna().value_counts()
             counts = counts[counts >= self.min_count].head(self.max_levels)
             self.levels_[c] = sorted(counts.index.tolist())
+        self.multilabel = [c for c in self.multilabel if c in df]
+        self.labels_ = {}
+        for c in self.multilabel:
+            counts = _split_labels(df[c]).explode().dropna().value_counts()
+            counts = counts[counts >= self.min_count].head(self.max_labels)
+            self.labels_[c] = sorted(counts.index.tolist())
         self.feature_names_ = (
             cont
             + [f"{c}_missing" for c in self.indicator_cols_]
             + [f"{c}={lvl}" for c in self.categorical for lvl in self.levels_[c]]
             + [f"{c}=other" for c in self.categorical]
+            + [f"{c}={lab}" for c in self.multilabel for lab in self.labels_[c]]
         )
         return self
 
@@ -603,6 +636,14 @@ class Preprocessor:
             others.append((m.sum(axis=1) == 0).astype(float)[:, None])
         blocks.extend(onehots)
         blocks.extend(others)
+        for c in self.multilabel:
+            pos = {lab: j for j, lab in enumerate(self.labels_[c])}
+            m = np.zeros((len(df), len(pos)))
+            for i, labels in enumerate(_split_labels(df[c])):
+                for lab in labels:
+                    if lab in pos:
+                        m[i, pos[lab]] = 1.0
+            blocks.append(m)
         return np.hstack(blocks).astype(float)
 
     def fit_transform(self, df: pd.DataFrame) -> np.ndarray:

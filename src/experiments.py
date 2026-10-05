@@ -44,6 +44,48 @@ from .svr import PegasosSVR, RFFPegasosSVR
 from .tree_compare import compare_tree_structure
 
 SEED = config.SEED
+# The Preprocessor puts the numeric features first, so log(area) has a fixed column.
+LOG_AREA_COL = dp.NUMERIC_FEATURES.index("log_area")
+
+
+class PerM2Target:
+    """
+    Wraps a regressor so it learns log(price per m²) = log(price) - log(area)
+    and adds log(area) back when predicting, so it still outputs log(price).
+
+    A tree predicts a constant per leaf. With the plain target every flat in
+    a leaf gets the same price; with this target it gets the same price per
+    m², and its exact area scales it. Nothing is estimated here (the offset
+    is a feature of the row itself), so it cannot leak. Other attributes
+    (feature_importances_, get_depth, ...) are forwarded to the inner model.
+    """
+
+    def __init__(self, model, col: int = LOG_AREA_COL):
+        self.model = model
+        self.col = col
+
+    def offset(self, X):
+        return np.asarray(X, dtype=float)[:, self.col] if config.PER_M2_TARGET else 0.0
+
+    def fit(self, X, y):
+        self.model.fit(X, np.asarray(y, dtype=float) - self.offset(X))
+        return self
+
+    def predict(self, X, **kw):
+        return self.model.predict(X, **kw) + self.offset(X)
+
+    def staged_predict(self, X):
+        for p in self.model.staged_predict(X):
+            yield p + self.offset(X)
+
+    def staged_output(self, X):
+        for p in self.model.staged_output(X):
+            yield p + self.offset(X)
+
+    def __getattr__(self, name):
+        if name == "model":
+            raise AttributeError(name)
+        return getattr(self.model, name)
 
 
 # =============================================================================
@@ -238,8 +280,8 @@ def tree_studies(data: Data, s: Settings) -> dict:
     reg_records, reg_curve = [], None
     msl_full_val = []
     for msl in s.min_leaf_grid:
-        tree = DecisionTree("regression", "mse", max_depth=max_d, min_samples_leaf=msl,
-                            random_state=SEED).fit(X_tr, yl_tr)
+        tree = PerM2Target(DecisionTree("regression", "mse", max_depth=max_d, min_samples_leaf=msl,
+                                        random_state=SEED)).fit(X_tr, yl_tr)
         tr_r, va_r = [], []
         for d in depths:
             va = ev.rmse(yl_va, tree.predict(X_va, truncate_depth=d))
@@ -257,9 +299,9 @@ def tree_studies(data: Data, s: Settings) -> dict:
     # ---- third hyperparameter: min_impurity_decrease at the chosen depth/leaf
     mid_val, mid_nodes = [], []
     for mid in s.min_decrease_grid:
-        t = DecisionTree("regression", "mse", max_depth=best_reg["max_depth"],
-                         min_samples_leaf=best_reg["min_samples_leaf"],
-                         min_impurity_decrease=mid).fit(X_tr, yl_tr)
+        t = PerM2Target(DecisionTree("regression", "mse", max_depth=best_reg["max_depth"],
+                                     min_samples_leaf=best_reg["min_samples_leaf"],
+                                     min_impurity_decrease=mid)).fit(X_tr, yl_tr)
         mid_val.append(ev.rmse(yl_va, t.predict(X_va)))
         mid_nodes.append(t.node_count)
     best_mid = float(s.min_decrease_grid[int(np.argmin(np.round(mid_val, 10)))])
@@ -274,9 +316,9 @@ def tree_studies(data: Data, s: Settings) -> dict:
         n = max(50, int(frac * len(perm)))
         idx = perm[:n]
         sizes.append(n)
-        r = DecisionTree("regression", "mse", max_depth=best_reg["max_depth"],
-                         min_samples_leaf=best_reg["min_samples_leaf"],
-                         min_impurity_decrease=best_mid).fit(X_tr[idx], yl_tr[idx])
+        r = PerM2Target(DecisionTree("regression", "mse", max_depth=best_reg["max_depth"],
+                                     min_samples_leaf=best_reg["min_samples_leaf"],
+                                     min_impurity_decrease=best_mid)).fit(X_tr[idx], yl_tr[idx])
         lc["reg_tr"].append(ev.rmse(yl_tr[idx], r.predict(X_tr[idx])))
         lc["reg_va"].append(ev.rmse(yl_va, r.predict(X_va)))
         c = DecisionTree("classification", best_clf["criterion"], max_depth=best_clf["max_depth"],
@@ -416,8 +458,8 @@ def reg_models(tree_cfg, ridge_alpha):
     kw = dict(max_depth=tree_cfg["max_depth"], min_samples_leaf=tree_cfg["min_samples_leaf"],
               min_impurity_decrease=tree_cfg["min_impurity_decrease"])
     return {
-        "Ours: decision tree": ("X", lambda: DecisionTree("regression", "mse", random_state=SEED, **kw)),
-        "sklearn DecisionTreeRegressor": ("X", lambda: DecisionTreeRegressor(random_state=SEED, **kw)),
+        "Ours: decision tree": ("X", lambda: PerM2Target(DecisionTree("regression", "mse", random_state=SEED, **kw))),
+        "sklearn DecisionTreeRegressor": ("X", lambda: PerM2Target(DecisionTreeRegressor(random_state=SEED, **kw))),
         "Ours: ridge (bonus)": ("Z", lambda: RidgeRegression(ridge_alpha)),
         "sklearn Ridge": ("Z", lambda: SkRidge(alpha=ridge_alpha)),
     }
@@ -612,7 +654,9 @@ def analysis(data: Data, s: Settings, fin: dict) -> dict:
             ("regression", "reg::Ours: decision tree", "reg::sklearn DecisionTreeRegressor", D.ylog[0]),
             ("classification", "clf::Ours: decision tree", "clf::sklearn DecisionTreeClassifier", D.tier[0])):
         ours, sk = models[ours_key], models[sk_key]
-        st = compare_tree_structure(ours, sk, D.X[0], y_fit)
+        if isinstance(ours, PerM2Target):       # compare the trees on the target they were fit to
+            y_fit = y_fit - ours.offset(D.X[0])
+        st = compare_tree_structure(getattr(ours, "model", ours), getattr(sk, "model", sk), D.X[0], y_fit)
         po, ps = ours.predict(D.X[1]), sk.predict(D.X[1])
         agree = float(np.mean(np.isclose(po, ps))) if task == "regression" else float(np.mean(po == ps))
         # float32 effect: distinct float64 values that collapse in float32
@@ -760,20 +804,21 @@ def bonus_ensembles(data: Data, s: Settings, tree_res, fin) -> dict:
     out = {}
     times = {}
     with ev.timer(times, "rf_reg_fit_s"):
-        rf = RandomForest("regression", n_estimators=s.forest_trees, max_features=1 / 3,
-                          min_samples_leaf=2, random_state=SEED).fit(X0, y0)
+        rf = PerM2Target(RandomForest("regression", n_estimators=s.forest_trees, max_features=1 / 3,
+                                      min_samples_leaf=config.FOREST_MIN_LEAF, random_state=SEED)).fit(X0, y0)
     rf_curve = [ev.rmse(y1, p) for p in rf.staged_output(X1)]
     with ev.timer(times, "sk_rf_reg_fit_s"):
-        skrf = SkRFR(n_estimators=s.forest_trees, max_features=1 / 3, min_samples_leaf=2,
-                     random_state=SEED, n_jobs=1).fit(X0, y0)
+        skrf = PerM2Target(SkRFR(n_estimators=s.forest_trees, max_features=1 / 3,
+                                 min_samples_leaf=config.FOREST_MIN_LEAF, random_state=SEED,
+                                 n_jobs=1)).fit(X0, y0)
     sk_rf_rmse = ev.rmse(y1, skrf.predict(X1))
     with ev.timer(times, "gb_fit_s"):
-        gb = GradientBoostingRegressor(n_estimators=s.boost_trees, learning_rate=config.BOOST_LR,
-                                       max_depth=config.BOOST_DEPTH, random_state=SEED).fit(X0, y0)
+        gb = PerM2Target(GradientBoostingRegressor(n_estimators=s.boost_trees, learning_rate=config.BOOST_LR,
+                                                   max_depth=config.BOOST_DEPTH, random_state=SEED)).fit(X0, y0)
     gb_curve = [ev.rmse(y1, p) for p in gb.staged_predict(X1)]
     with ev.timer(times, "sk_gb_fit_s"):
-        skgb = SkGB(n_estimators=s.boost_trees, learning_rate=config.BOOST_LR,
-                    max_depth=config.BOOST_DEPTH, random_state=SEED).fit(X0, y0)
+        skgb = PerM2Target(SkGB(n_estimators=s.boost_trees, learning_rate=config.BOOST_LR,
+                                max_depth=config.BOOST_DEPTH, random_state=SEED)).fit(X0, y0)
     sk_gb_rmse = ev.rmse(y1, skgb.predict(X1))
     with ev.timer(times, "rf_clf_fit_s"):
         rfc = RandomForest("classification", n_estimators=s.forest_trees, max_features="sqrt",
@@ -852,8 +897,8 @@ def bonus_unsupervised(data: Data, s: Settings, fin, tree_res) -> dict:
     best = tree_res["best_reg"]
     kw = dict(max_depth=best["max_depth"], min_samples_leaf=best["min_samples_leaf"],
               min_impurity_decrease=best["min_impurity_decrease"])
-    base = DecisionTree("regression", **kw).fit(Dv.X[0], Dv.ylog[0])
-    aug = DecisionTree("regression", **kw).fit(np.hstack([Dv.X[0], onehot(tr_df)]), Dv.ylog[0])
+    base = PerM2Target(DecisionTree("regression", **kw)).fit(Dv.X[0], Dv.ylog[0])
+    aug = PerM2Target(DecisionTree("regression", **kw)).fit(np.hstack([Dv.X[0], onehot(tr_df)]), Dv.ylog[0])
     ablation = dict(val_rmse_without=ev.rmse(Dv.ylog[1], base.predict(Dv.X[1])),
                     val_rmse_with_clusters=ev.rmse(Dv.ylog[1], aug.predict(np.hstack([Dv.X[1], onehot(va_df)]))))
 
