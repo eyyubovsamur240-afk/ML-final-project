@@ -1,6 +1,6 @@
 // The page: reads the form, asks predictor.js for an estimate on every edit,
-// and draws the location map (listing density from the training data, since
-// the published page cannot load map tiles from other sites).
+// and draws the location map (a public-domain coastline plus the neighbourhoods,
+// since the published page cannot load map tiles from other sites).
 "use strict";
 
 (() => {
@@ -129,7 +129,9 @@
       (r.models_agree ? "" : " The price model and the tier model disagree here, so this one is borderline.");
     renderFactors(r.factors);
     renderWhatIf(item, r.price_azn);
-    renderElsewhere(item, r.price_azn);
+    const places = placePrices(item, r.price_azn);
+    renderElsewhere(places);
+    renderMapPrices(places, item);
     const u = r.location_used;
     const coords = { "you": "the spot you marked", "typical for location": "typical for this location",
                      "not known": "not known" }[u.coordinates_from] || u.coordinates_from;
@@ -207,7 +209,7 @@
   // ------------------------------------------------------------------ elsewhere
   /** The listing priced in comparable places, each at its typical coordinates:
    *  flats across metro areas and districts, houses across the settlements. */
-  function renderElsewhere(item, price) {
+  function placePrices(item, price) {
     const house = item.category === HOUSE;
     const comparable = (key) => (house ? key.endsWith(" q.") : !key.endsWith(" q."));
     const rows = est.options().locations
@@ -217,6 +219,19 @@
     const here = item.location ? est.m.gazetteer[item.location] : null;
     rows.push({ value: item.location, label: here ? here.label : "Your listing", price, you: true });
     rows.sort((a, b) => b.price - a.price);
+    return { house, rows };
+  }
+
+  function renderMapPrices({ house, rows }, item) {
+    const byPlace = new Map(rows.filter((r) => r.value).map((r) => [r.value, r.price]));
+    const { lo, hi } = map.setPrices(byPlace, item.location);
+    $("leg-lo").textContent = short(lo);
+    $("leg-hi").textContent = short(hi);
+    $("map-key").textContent = `Colour: what this listing would cost in each ${house ? "settlement" : "metro area and district"}` +
+      ` (grey: ${house ? "city areas, compared for flats" : "suburban settlements, compared for houses"}).`;
+  }
+
+  function renderElsewhere({ house, rows }) {
     const n = rows.length, at = rows.findIndex((r) => r.you);
     const keep = new Set([0, 1, 2, 3, n - 3, n - 2, n - 1, at - 1, at, at + 1].filter((i) => i >= 0 && i < n));
     const max = rows[0].price;
@@ -298,28 +313,36 @@
   }
 
   // ------------------------------------------------------------------ map
+  // Land and sea from a public-domain coastline (Natural Earth), one circle per
+  // neighbourhood at its typical coordinates, coloured by what THIS listing
+  // would cost there. Tap a circle to choose it; tap elsewhere to mark a spot.
   const map = (() => {
     const canvas = $("map");
     const ctx = canvas.getContext("2d");
     const COS = Math.cos((40.4 * Math.PI) / 180);
-    let meta = null, cells = [], maxCount = 1, metros = [];
-    let w = 0, h = 0, dpr = 1;
+    const VIEW = { lat: [40.15, 40.75], lng: [49.3, 50.5] };     // how far you can pan
+    const K_MAX = 30000;
+    let geo = null, places = [], prices = new Map(), lo = 0, hi = 1, selected = null;
+    let onPick = () => {}, onSpot = () => {};
+    let w = 0, h = 0, dpr = 1, kMin = 300, k = 1900;
     let center = { lat: 40.405, lng: 49.87 };
-    let k = 1500;                       // pixels per degree of latitude
-    let kMin = 300;
-    const K_MAX = 40000;
-    let focus = null;                   // the chosen location's typical spot
 
     const toPx = (lat, lng) => [w / 2 + (lng - center.lng) * k * COS, h / 2 - (lat - center.lat) * k];
     const toGeo = (x, y) => ({ lat: center.lat - (y - h / 2) / k, lng: center.lng + (x - w / 2) / (k * COS) });
     const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const hex = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+    const radius = () => (k > 6000 ? 8 : k > 2500 ? 6.5 : 5);
+
+    function shade(price) {                                   // light = cheaper, dark = dearer
+      const a = hex(css("--seq-lo")), b = hex(css("--seq-hi"));
+      const t = hi > lo ? Math.min(1, Math.max(0, (Math.log(price) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)))) : 0.5;
+      return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(",")})`;
+    }
 
     function clampView() {
-      if (!meta) return;
-      const box = meta.box;
       k = Math.min(K_MAX, Math.max(kMin, k));
-      center.lat = Math.min(box.lat[1], Math.max(box.lat[0], center.lat));
-      center.lng = Math.min(box.lng[1], Math.max(box.lng[0], center.lng));
+      center.lat = Math.min(VIEW.lat[1], Math.max(VIEW.lat[0], center.lat));
+      center.lng = Math.min(VIEW.lng[1], Math.max(VIEW.lng[0], center.lng));
     }
 
     function resize() {
@@ -328,93 +351,167 @@
       h = canvas.clientHeight;
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
-      if (meta) kMin = Math.min(w / ((meta.box.lng[1] - meta.box.lng[0]) * COS), h / (meta.box.lat[1] - meta.box.lat[0]));
+      kMin = Math.min(w / ((VIEW.lng[1] - VIEW.lng[0]) * COS), h / (VIEW.lat[1] - VIEW.lat[0]));
+      clampView();
       draw();
+    }
+
+    function ring(points) {
+      ctx.beginPath();
+      points.forEach(([lng, lat], i) => { const [x, y] = toPx(lat, lng); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.closePath();
     }
 
     function draw() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = css("--map-bg");
+      ctx.fillStyle = css("--land");
       ctx.fillRect(0, 0, w, h);
-      if (meta && meta.rows) {
-        const accent = css("--accent");
-        if (!heat || heatColor !== accent) paintHeat(accent);
-        const lat0 = meta.box.lat[0], lng0 = meta.box.lng[0], d = meta.cell_deg;
-        const [x0, y0] = toPx(lat0 + meta.rows * d, lng0);
-        const [x1, y1] = toPx(lat0, lng0 + meta.cols * d);
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
-        ctx.drawImage(heat, x0, y0, x1 - x0, y1 - y0);
-      }
-      // metro stations, labelled once zoomed in
-      const ink = css("--map-dot");
-      ctx.font = `11px ${css("--mono")}`;
-      for (const m of metros) {
-        const [x, y] = toPx(m.lat, m.lng);
-        if (x < -40 || y < -20 || x > w + 40 || y > h + 20) continue;
-        ctx.fillStyle = ink;
-        ctx.globalAlpha = 0.75;
+      if (!geo) return;
+      ctx.fillStyle = css("--water");
+      ctx.strokeStyle = css("--coast");
+      ctx.lineWidth = 1.2;
+      for (const r of geo.water) { ring(r); ctx.fill(); ctx.stroke(); }
+      ctx.fillStyle = css("--land");
+      for (const r of geo.islands) { ring(r); ctx.fill(); ctx.stroke(); }
+      seaLabel();
+
+      // circles: priced places in colour, the rest as small grey rings
+      const r = radius(), surface = css("--surface"), muted = css("--muted"), ink = css("--ink"), ringColor = css("--ring");
+      const shown = [];
+      for (const p of places) {
+        const [x, y] = toPx(p.lat, p.lng);
+        if (x < -20 || y < -20 || x > w + 20 || y > h + 20) continue;
+        const price = prices.get(p.value);
         ctx.beginPath();
-        ctx.arc(x, y, k > 2500 ? 3 : 2, 0, 2 * Math.PI);
-        ctx.fill();
-        if (k > 4500) { ctx.globalAlpha = 0.8; ctx.fillText(m.name, x + 5, y - 4); }
+        if (price != null) {
+          ctx.arc(x, y, r, 0, 2 * Math.PI);
+          ctx.fillStyle = shade(price);
+          ctx.fill();
+          ctx.strokeStyle = ringColor;
+          ctx.lineWidth = 1.25;
+          ctx.stroke();
+        } else {
+          ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
+          ctx.globalAlpha = 0.6;
+          ctx.strokeStyle = muted;
+          ctx.lineWidth = 1.25;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+        shown.push({ p, x, y, priced: price != null });
       }
-      ctx.globalAlpha = 1;
-      if (focus) {
-        const [x, y] = toPx(focus.lat, focus.lng);
+      const sel = shown.find((s) => s.p.value === selected);
+      if (sel) {
+        ctx.beginPath();
+        ctx.arc(sel.x, sel.y, r + 4, 0, 2 * Math.PI);
         ctx.strokeStyle = ink;
-        ctx.lineWidth = 2;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.arc(x, y, 11, 0, 2 * Math.PI);
+        ctx.lineWidth = 2.5;
         ctx.stroke();
-        ctx.setLineDash([]);
       }
+
+      // labels: the chosen place first, then priced places by listing count;
+      // a label is skipped where it would cover one already placed
+      // labels keep clear of other labels and of the coloured circles' centres (grey dots may be covered)
+      const c = r - 2;
+      const boxes = shown.filter((s) => s.priced).map((s) => ({ x0: s.x - c, x1: s.x + c, y0: s.y - c, y1: s.y + c }));
+      boxes.push({ x0: w - 52, x1: w, y0: 0, y1: 92 },          // zoom buttons
+                 { x0: w - 130, x1: w, y0: h - 32, y1: h });     // scale bar
+      if (pin) boxes.push({ x0: 0, x1: 120, y0: 0, y1: 46 });   // "Remove pin" button
+      const free = (b) => b.x0 >= 2 && b.x1 <= w - 2 && b.y0 >= 2 && b.y1 <= h - 2 &&
+        !boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+      const order = shown.slice().sort((a, b) => (b.p.value === selected) - (a.p.value === selected) ||
+        b.priced - a.priced || b.p.n - a.p.n);
+      let labelled = 0;
+      for (const s of order) {
+        if (!s.priced && s.p.value !== selected && k < 5000) continue;
+        const bold = s.p.value === selected;
+        const price = prices.get(s.p.value);
+        const nameFont = `${bold ? 600 : 400} ${bold ? 13 : 12}px ${css("--body")}`, numFont = `500 11px ${css("--mono")}`;
+        ctx.font = nameFont;
+        const nw = ctx.measureText(s.p.name).width;
+        ctx.font = numFont;
+        const num = price != null ? ` ${short(price)}` : "";
+        const tw = nw + (num ? ctx.measureText(num).width : 0);
+        const gap = r + (bold ? 7 : 4);
+        const tries = [[s.x + gap, s.y + 4], [s.x - gap - tw, s.y + 4], [s.x - tw / 2, s.y - gap - 2], [s.x - tw / 2, s.y + gap + 11],
+                       [s.x + gap - 2, s.y - gap + 2], [s.x + gap - 2, s.y + gap + 8], [s.x - gap - tw + 2, s.y - gap + 2], [s.x - gap - tw + 2, s.y + gap + 8]];
+        for (const [tx, ty] of tries) {
+          const b = { x0: tx - 2, x1: tx + tw + 2, y0: ty - 11, y1: ty + 3 };
+          if (!free(b) && !bold) continue;
+          boxes.push(b);
+          const halo = css("--land");
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = halo;
+          ctx.font = nameFont;
+          ctx.strokeText(s.p.name, tx, ty);
+          ctx.fillStyle = s.priced || bold ? ink : muted;
+          ctx.fillText(s.p.name, tx, ty);
+          if (num) {
+            ctx.font = numFont;
+            ctx.strokeText(num, tx + nw, ty);
+            ctx.fillStyle = muted;
+            ctx.fillText(num, tx + nw, ty);
+          }
+          labelled += 1;
+          break;
+        }
+      }
+
+      canvas.dataset.labels = String(labelled);
       if (pin) {
         const [x, y] = toPx(pin.lat, pin.lng);
-        ctx.fillStyle = css("--accent");
-        ctx.strokeStyle = css("--surface");
-        ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(x, y, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = css("--accent");
         ctx.fill();
+        ctx.strokeStyle = surface;
+        ctx.lineWidth = 3;
         ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
+        ctx.fillStyle = surface;
+        ctx.fill();
       }
       drawScale(ink);
     }
 
-    // one pixel per grid cell, north up; the browser smooths it when scaled
-    let heat = null, heatColor = "";
-    function paintHeat(color) {
-      heat = document.createElement("canvas");
-      heat.width = meta.cols;
-      heat.height = meta.rows;
-      const hc = heat.getContext("2d");
-      hc.fillStyle = color;
-      for (const [r, c, n] of cells) {
-        hc.globalAlpha = 0.1 + 0.8 * (Math.log(n) / Math.log(maxCount));
-        hc.fillRect(c, meta.rows - 1 - r, 1, 1);
+    /** "Caspian Sea" in the lowest spot where the whole label sits on visible water. */
+    function seaLabel() {
+      const text = "Caspian Sea";
+      ctx.font = `italic 12px ${css("--body")}`;
+      const tw = ctx.measureText(text).width;
+      const path = new Path2D();
+      for (const r of geo.water) {
+        r.forEach(([lng, lat], i) => { const [x, y] = toPx(lat, lng); i ? path.lineTo(x, y) : path.moveTo(x, y); });
+        path.closePath();
       }
-      heatColor = color;
+      const wet = (x, y) => ctx.isPointInPath(path, x * dpr, y * dpr);
+      for (let y = h - 40; y > 24; y -= 12) {
+        for (let x = 10; x < w - tw - 60; x += 12) {
+          if (wet(x - 4, y - 14) && wet(x + tw + 4, y - 14) && wet(x - 4, y + 6) && wet(x + tw + 4, y + 6)) {
+            ctx.fillStyle = css("--coast");
+            ctx.fillText(text, x, y);
+            return;
+          }
+        }
+      }
     }
 
     function drawScale(ink) {
       const kmPerPx = 111.32 / k;
-      const target = 80 * kmPerPx;
-      const nice = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50].find((v) => v >= target * 0.6) || 50;
+      const nice = [0.2, 0.5, 1, 2, 5, 10, 20].find((v) => v / kmPerPx >= 50) || 20;
       const len = nice / kmPerPx;
       const x1 = w - 12, x0 = x1 - len, y = h - 10;
       ctx.strokeStyle = ink;
       ctx.fillStyle = ink;
-      ctx.globalAlpha = 0.8;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(x0, y - 4); ctx.lineTo(x0, y); ctx.lineTo(x1, y); ctx.lineTo(x1, y - 4);
       ctx.stroke();
+      ctx.font = `11px ${css("--mono")}`;
       ctx.textAlign = "right";
       ctx.fillText(nice < 1 ? `${nice * 1000} m` : `${nice} km`, x1, y - 6);
       ctx.textAlign = "left";
-      ctx.globalAlpha = 1;
     }
 
     function zoomAt(factor, x = w / 2, y = h / 2) {
@@ -428,14 +525,29 @@
       draw();
     }
 
-    function goTo(lat, lng, zoom) {
-      center = { lat, lng };
-      if (zoom) k = Math.max(k, zoom);
+    function show(lat, lng, minZoom) {
+      if (lat < VIEW.lat[0] || lat > VIEW.lat[1] || lng < VIEW.lng[0] || lng > VIEW.lng[1]) return false;
+      const [x, y] = toPx(lat, lng);
+      const margin = 40;
+      if (k < minZoom) k = minZoom;
+      if (x < margin || y < margin || x > w - margin || y > h - margin || k === minZoom) center = { lat, lng };
       clampView();
       draw();
+      return true;
     }
 
-    // pointer gestures: drag to pan, pinch to zoom, tap to drop the pin
+    function tap(x, y) {
+      let best = null, bestD = 18;
+      for (const p of places) {
+        const [px, py] = toPx(p.lat, p.lng);
+        const d = Math.hypot(px - x, py - y);
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      if (best) onPick(best.value);
+      else onSpot(toGeo(x, y));
+    }
+
+    // gestures: drag to pan, pinch to zoom, tap to choose
     const pointers = new Map();
     let moved = false, pinch = 0;
     canvas.addEventListener("pointerdown", (e) => {
@@ -465,10 +577,10 @@
       }
     });
     const end = (e) => {
-      const tap = pointers.size === 1 && !moved && e.type === "pointerup";
+      const isTap = pointers.size === 1 && !moved && e.type === "pointerup";
       pointers.delete(e.pointerId);
       if (pointers.size < 2) pinch = 0;
-      if (tap) setPin(toGeo(e.offsetX, e.offsetY));
+      if (isTap) tap(e.offsetX, e.offsetY);
     };
     canvas.addEventListener("pointerup", end);
     canvas.addEventListener("pointercancel", end);
@@ -483,7 +595,7 @@
         draw();
       } else if (e.key === "+" || e.key === "=") zoomAt(1.6);
       else if (e.key === "-") zoomAt(1 / 1.6);
-      else if (e.key === "Enter") setPin({ ...center });
+      else if (e.key === "Enter") onSpot({ ...center });
       else return;
       e.preventDefault();
     });
@@ -493,23 +605,29 @@
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
     new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
-    function init(density, gazetteer) {
-      meta = density;
-      if (density) {
-        cells = density.cells;
-        maxCount = Math.max(2, ...cells.map((c) => c[2]));
-      } else {
-        $("map-key").textContent = "Dots are metro stations.";
-        meta = { box: { lat: [40.25, 40.65], lng: [49.45, 50.4] } };
-      }
-      metros = Object.entries(gazetteer)
-        .filter(([key, g]) => key.endsWith(" m.") && g.lat != null)
-        .map(([, g]) => ({ lat: g.lat, lng: g.lng, name: g.label.replace(/ \(metro\)$/, "") }));
+    function init(coast, gazetteer, handlers) {
+      geo = coast;
+      ({ onPick, onSpot } = handlers);
+      places = Object.entries(gazetteer).filter(([, g]) => g.lat != null).map(([value, g]) => {
+        const m = /^(.*) \((metro|district|settlement)\)$/.exec(g.label);
+        return { value, lat: g.lat, lng: g.lng, n: g.n_listings,
+                 name: m ? (m[2] === "district" ? `${m[1]} district` : m[1]) : g.label };
+      });
       resize();
     }
 
-    return { init, draw, goTo, toGeo, setFocus: (f) => { focus = f; draw(); }, inBox: (lat, lng) =>
-      meta && lat >= meta.box.lat[0] && lat <= meta.box.lat[1] && lng >= meta.box.lng[0] && lng <= meta.box.lng[1] };
+    /** Colour the circles: priceByPlace maps location -> this listing's price there. */
+    function setPrices(priceByPlace, current) {
+      prices = priceByPlace;
+      const v = [...prices.values()];
+      lo = Math.min(...v);
+      hi = Math.max(...v);
+      selected = current;
+      draw();
+      return { lo, hi };
+    }
+
+    return { init, draw, show, setPrices, setSelected: (v) => { selected = v; draw(); } };
   })();
 
   function nearestLocation(lat, lng) {
@@ -523,15 +641,18 @@
     return bestKm <= 2 ? best : null;
   }
 
+  const COORDS_HINT = "Tap a circle to choose that neighbourhood, or tap anywhere else to mark the exact spot. " +
+    "Zoom in to see more names.";
+
   function setPin(p) {
     if (!est) return;
     pin = { lat: Math.round(p.lat * 1e5) / 1e5, lng: Math.round(p.lng * 1e5) / 1e5 };
-    let msg = `Marked spot: ${pin.lat.toFixed(4)}, ${pin.lng.toFixed(4)}.`;
+    let msg = "Exact spot marked.";
     if (!$("location").value) {
       const near = nearestLocation(pin.lat, pin.lng);
       if (near) {
         $("location").value = near;
-        map.setFocus(null);
+        map.setSelected(near);
         msg += ` Neighbourhood set to the nearest one, ${est.m.gazetteer[near].label}; change it if that's wrong.`;
       }
     }
@@ -545,18 +666,27 @@
   function clearPin(silent) {
     pin = null;
     $("map-clear").hidden = true;
-    $("coords").textContent = "Tap the map to mark the exact spot (optional). Drag to move, pinch or use +/− to zoom.";
+    $("coords").textContent = COORDS_HINT;
     map.draw();
     if (!silent) schedule();
   }
 
+  /** A circle on the map was tapped: choose that neighbourhood. */
+  function pickPlace(value) {
+    $("location").value = value;
+    clearPin(true);
+    focusLocation();
+    $("coords").textContent = `${est.m.gazetteer[value].label} chosen. ${COORDS_HINT}`;
+    markEdited();
+    estimate();
+  }
+
   function focusLocation() {
-    const g = est && est.m.gazetteer[$("location").value];
-    if (g && g.lat != null) {
-      map.setFocus({ lat: g.lat, lng: g.lng });
-      if (map.inBox(g.lat, g.lng)) map.goTo(g.lat, g.lng, 3500);
-      else $("coords").textContent = `${g.label} is outside the map area; its typical coordinates are used.`;
-    } else map.setFocus(null);
+    const value = $("location").value;
+    const g = est && est.m.gazetteer[value];
+    map.setSelected(value || null);
+    if (g && g.lat != null && !map.show(g.lat, g.lng, 1900))
+      $("coords").textContent = `${g.label} is outside the map area; its typical coordinates are used.`;
   }
 
   // ------------------------------------------------------------------ examples
@@ -654,7 +784,7 @@
       fillOptions();
       renderExamples();
       renderCard(est.card());
-      map.init(est.m.density, est.m.gazetteer);
+      map.init(est.m.map, est.m.gazetteer, { onPick: pickPlace, onSpot: setPin });
       focusLocation();
       estimate();
       est.explainReady.then(estimate, () => { explainFailed = true; estimate(); });

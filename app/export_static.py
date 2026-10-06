@@ -14,8 +14,9 @@ site/ holds:
   explain-*.txt  gzip stream (base64): internal node means, only needed for
                "what drove this price"; the page fetches it after the first estimate
 
-Nothing in site/ is a listing: the map layer is a grid of listing COUNTS per cell
-(training rows only, cells with fewer than MIN_CELL listings dropped).
+Nothing in site/ is a listing. The map draws a public-domain coastline
+(app/static_site/coast.json, Natural Earth) and each location's typical
+coordinates from the bundle's gazetteer (medians of training rows).
 """
 
 from __future__ import annotations
@@ -38,15 +39,13 @@ from src import config
 from src import data_prep as dp
 
 from .predictor import (CATEGORY_LABELS, DEFAULT_MODEL_PATH, FACTOR_LABELS, LOG_AREA_COL, Listing,
-                        PricePredictor, _sha256)
+                        PricePredictor)
 
 HERE = Path(__file__).resolve().parent / "static_site"
 DEFAULT_OUT = config.ROOT / "site"
 FORMAT_VERSION = 1
 CHUNK_BYTES = 9 * 2**20           # 12 MB once base64-encoded: under the 15 MB per-file limit of static hosts
-MAP_BOX = {"lat": (40.25, 40.65), "lng": (49.45, 50.40)}   # Absheron peninsula: Baku, Sumqayit, Xirdalan
-MAP_CELL_DEG = 0.004              # ~0.35 x 0.45 km
-MIN_CELL = 3                      # suppress cells with fewer listings than this
+PIN_BOX = {"lat": (40.25, 40.65), "lng": (49.45, 50.40)}   # random map pins in the tests: Absheron peninsula
 
 
 # ----------------------------------------------------------------- binary model
@@ -143,33 +142,8 @@ def pack_sections(sections: list[tuple[str, np.ndarray]]) -> tuple[bytes, list[d
     return b"".join(parts), layout
 
 
-# ----------------------------------------------------------------- map layer
-def density_grid(model: PricePredictor, data: Path | None):
-    """Listing counts per map cell over the TRAINING rows of the bundle's own split."""
-    if data is None:
-        return None
-    cleaned = dp.clean(dp.load_raw(data))
-    if model.meta_.get("fast") and len(cleaned) > config.FAST["max_rows"]:      # as app.train does
-        cleaned = cleaned.sample(n=config.FAST["max_rows"], random_state=config.SEED).reset_index(drop=True)
-    _, price, _ = dp.make_features(cleaned)
-    tr, va, _ = dp.split_indices(len(price), stratify=dp.price_strata(price), seed=model.meta_["seed"])
-    dev = cleaned.iloc[np.concatenate([tr, va])]
-    lat, lng = dev["lat"].to_numpy(float), dev["lng"].to_numpy(float)
-    (la0, la1), (lo0, lo1) = MAP_BOX["lat"], MAP_BOX["lng"]
-    rows, cols = round((la1 - la0) / MAP_CELL_DEG), round((lo1 - lo0) / MAP_CELL_DEG)
-    ok = np.isfinite(lat) & np.isfinite(lng) & (lat >= la0) & (lat < la1) & (lng >= lo0) & (lng < lo1)
-    r = ((lat[ok] - la0) / MAP_CELL_DEG).astype(int).clip(0, rows - 1)
-    c = ((lng[ok] - lo0) / MAP_CELL_DEG).astype(int).clip(0, cols - 1)
-    counts = np.zeros((rows, cols), int)
-    np.add.at(counts, (r, c), 1)
-    cells = [[int(i), int(j), int(counts[i, j])] for i, j in zip(*np.nonzero(counts >= MIN_CELL))]
-    return {"box": MAP_BOX, "cell_deg": MAP_CELL_DEG, "rows": rows, "cols": cols,
-            "min_cell": MIN_CELL, "cells": cells, "n_listings": int(ok.sum())}
-
-
 # ----------------------------------------------------------------- export
-def build_meta(model: PricePredictor, streams: dict, offsets: list[int], total_nodes: int,
-               density) -> dict:
+def build_meta(model: PricePredictor, streams: dict, offsets: list[int], total_nodes: int) -> dict:
     pre = model.pre_
     rff, lin = model.svm_.rff_, model.svm_.svm_
     card = {k: v for k, v in model.card().items() if k not in ("python",)}
@@ -201,11 +175,11 @@ def build_meta(model: PricePredictor, streams: dict, offsets: list[int], total_n
         "svm": {"n_features": int(rff.W_.shape[0]), "n_components": int(rff.W_.shape[1]),
                 "intercept": float(lin.intercept_)},
         "binary": streams,
-        "density": density,
+        "map": json.loads((HERE / "coast.json").read_text()),
     }
 
 
-def export(model: PricePredictor, out: Path, data: Path | None = None, standalone: bool = False) -> dict:
+def export(model: PricePredictor, out: Path, standalone: bool = False) -> dict:
     out = Path(out)
     if out.exists():
         shutil.rmtree(out)
@@ -215,7 +189,7 @@ def export(model: PricePredictor, out: Path, data: Path | None = None, standalon
     rff, lin = model.svm_.rff_, model.svm_.svm_
     core += [("W", rff.W_), ("c", rff.c_), ("coef", lin.coef_)]
     streams = {"core": write_stream(out, "model", core), "explain": write_stream(out, "explain", explain)}
-    meta = build_meta(model, streams, offsets, len(feat), density_grid(model, data))
+    meta = build_meta(model, streams, offsets, len(feat))
     (out / "model.json").write_text(json.dumps(meta, allow_nan=False, separators=(",", ":")))
     (out / "index.html").write_text(build_page(standalone))
     return meta
@@ -265,7 +239,7 @@ def random_listings(model: PricePredictor, n: int, seed: int = 0) -> list[dict]:
     houses with land, unknown-length descriptions with Azerbaijani/Russian text)."""
     rnd = random.Random(seed)
     locs = list(model.gazetteer_)
-    (la0, la1), (lo0, lo1) = MAP_BOX["lat"], MAP_BOX["lng"]
+    (la0, la1), (lo0, lo1) = PIN_BOX["lat"], PIN_BOX["lng"]
     maybe = lambda p, v: v if rnd.random() < p else None  # noqa: E731
     out = []
     for _ in range(n):
@@ -316,21 +290,12 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=str(DEFAULT_MODEL_PATH), help="bundle written by app.train")
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="output directory (replaced)")
-    ap.add_argument("--data", help="dataset for the map's density layer (default: data/house_sale.csv if present)")
     ap.add_argument("--standalone", action="store_true", help="wrap index.html in a full HTML document")
     ap.add_argument("--check", type=int, default=0, metavar="N", help="compare JS vs Python on N listings")
     args = ap.parse_args(argv)
 
     model = PricePredictor.load(args.model)
-    data = None
-    try:
-        data = dp.find_data_file(args.data)
-    except FileNotFoundError:
-        print("No dataset found: the map will show locations only (no density layer).")
-    if data is not None and model.meta_.get("data_sha256") not in (None, _sha256(data)):
-        print(f"{data} is not the file the bundle was trained on: skipping the density layer.")
-        data = None
-    meta = export(model, Path(args.out), data, args.standalone)
+    meta = export(model, Path(args.out), args.standalone)
     sizes = {p.name: p.stat().st_size for p in sorted(Path(args.out).iterdir())}
     print(f"Wrote {args.out}: " + ", ".join(f"{k} {v / 2**20:.1f} MB" for k, v in sizes.items()))
     b = meta["binary"]

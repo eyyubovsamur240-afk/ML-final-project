@@ -193,8 +193,9 @@ python -m app.export_static --check 500   # writes site/ and checks the JS port 
 thresholds and leaf values are stored as exact float64 (dictionary-coded), so the JS answers
 are identical to Python's (998 of 1,000 random listings; the other two differ by one 100 AZN
 rounding step where `exp` differs in the last bit between glibc and the browser).
-The map shows where the training listings are (counts per ~0.4 km cell), since the page loads
-no outside map tiles. Upload `site/` to any static host (GitHub Pages, Netlify, a claude.ai
+The map draws the Absheron coastline (public-domain Natural Earth data, `app/static_site/coast.json`)
+and every neighbourhood at its typical coordinates, coloured and labelled with what the current
+listing would cost there; the page loads no outside map tiles. Upload `site/` to any static host (GitHub Pages, Netlify, a claude.ai
 artifact); `--standalone` wraps the page in a full HTML document for hosts that need one.
 
 **API**: `POST /api/predict` takes a listing (`category`, `area_m2`, and any of `rooms`,
