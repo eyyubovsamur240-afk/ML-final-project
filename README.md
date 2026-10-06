@@ -181,6 +181,22 @@ docker run -p 8000:8000 -v "$PWD/models:/app/models:ro" binaaz-estimator
 The image holds the code only; the model bundle is mounted from `models/`.
 Behind a TLS-inspecting proxy, add `--secret id=pip_ca,src=/path/to/ca.crt` to the build.
 
+**No server: open it on a phone.** The same models also run entirely in the browser:
+
+```bash
+python -m app.export_static --check 500   # writes site/ and checks the JS port against Python on 500 listings
+```
+
+`site/` is a static page (`index.html` + `model.json` + the model data as gzip/base64 text,
+15 MB for estimates and 13 MB more for the explanation, fetched after the first estimate).
+`app/static_site/predictor.js` is a line-by-line port of `PricePredictor.predict`: the forest's
+thresholds and leaf values are stored as exact float64 (dictionary-coded), so the JS answers
+are identical to Python's (998 of 1,000 random listings; the other two differ by one 100 AZN
+rounding step where `exp` differs in the last bit between glibc and the browser).
+The map shows where the training listings are (counts per ~0.4 km cell), since the page loads
+no outside map tiles. Upload `site/` to any static host (GitHub Pages, Netlify, a claude.ai
+artifact); `--standalone` wraps the page in a full HTML document for hosts that need one.
+
 **API**: `POST /api/predict` takes a listing (`category`, `area_m2`, and any of `rooms`,
 `floor`, `total_floors`, `land_area_sot`, `location`, `lat`/`lng`, `repair`,
 `mortgage`, `bill_of_sale`, `description`); `GET /api/options` lists valid
@@ -188,7 +204,7 @@ locations; `GET /api/model` is the model card; `GET /api/health` is for probes.
 Inputs are validated with the same domain rules as the cleaning step (422 on bad input).
 
 Code: `app/predictor.py` (serving model), `app/main.py` (FastAPI), `app/static/` (page),
-`tests/test_app.py`, CI in `.github/workflows/app.yml` (tests, then builds the image and
+`app/export_static.py` + `app/static_site/` (browser version), `tests/test_app.py`, `tests/test_static_site.py`, CI in `.github/workflows/app.yml` (tests, then builds the image and
 queries the running container). Architecture diagram:
 [Eraser](https://app.eraser.io/workspace/4zDitvWlu68DfPiy4AyY).
 

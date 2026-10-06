@@ -37,3 +37,5 @@ report/generated/
 .idea/
 .vscode/
 models/
+site/
+site-golden.json
