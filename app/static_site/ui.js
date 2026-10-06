@@ -1,0 +1,797 @@
+// The page: reads the form, asks predictor.js for an estimate on every edit,
+// and draws the location map (a public-domain coastline plus the neighbourhoods,
+// since the published page cannot load map tiles from other sites).
+"use strict";
+
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const form = $("form");
+  const azn = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+  const money = (v) => `${azn.format(v)} AZN`;
+  const pct = (v) => `${(100 * v).toFixed(1)}%`;
+  const HOUSE = "heyet evi/bag evi";
+  const DEFAULT_LOCATION = "28 may m.";
+  const PAKO = "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako_inflate.min.js";
+  // One tap fills the whole form: handy when showing the models on a phone.
+  // The first one matches the form's initial values.
+  const EXAMPLES = [
+    { name: "3-room near 28 May metro", category: "yeni tikili", area_m2: 90, rooms: 3, floor: 7, total_floors: 16,
+      location: "28 may m.", repair: true, bill_of_sale: true, description: "Metroya yaxın, avro təmirli" },
+    { name: "Old 2-room, Nizami", category: "kohne tikili", area_m2: 55, rooms: 2, floor: 3, total_floors: 5,
+      location: "nizami m.", repair: false, bill_of_sale: true, description: "Təcili satılır" },
+    { name: "Sea-view penthouse, Bayil", category: "yeni tikili", area_m2: 180, rooms: 4, floor: 20, total_floors: 20,
+      location: "bayil q.", repair: true, bill_of_sale: true, description: "Dənizə baxan, avro təmirli, qaraj var" },
+    { name: "Garden villa, Mərdəkan", category: "heyet evi/bag evi", area_m2: 250, rooms: 6, land_area_sot: 8,
+      location: "merdekan q.", repair: true, bill_of_sale: true, description: "Bağ evi, hovuzlu" },
+    { name: "First flat, Masazır", category: "yeni tikili", area_m2: 52, rooms: 2, floor: 4, total_floors: 12,
+      location: "masazir q.", repair: false, bill_of_sale: false, mortgage: true, description: "İpoteka ilə alına bilər" },
+  ];
+
+  let est = null;
+  let pin = null;                // {lat, lng} the user tapped, or null
+  let edited = false;            // false while the form still holds an example listing
+  let example = EXAMPLES[0];
+  let resultInView = false;      // the full result panel is on screen (phones hide the price bar then)
+  let timer = 0;
+  let explainFailed = false;
+
+  // ------------------------------------------------------------------ form
+  function syncCategory() {
+    const house = form.category.value === HOUSE;
+    $("land").hidden = !house;
+    $("floors").hidden = house;
+  }
+
+  function readForm() {
+    const num = (id) => ($(id).value.trim() === "" ? null : Number($(id).value));
+    const house = form.category.value === HOUSE;
+    return {
+      category: form.category.value,
+      area_m2: num("area_m2"),
+      rooms: num("rooms"),
+      floor: house ? null : num("floor"),
+      total_floors: house ? null : num("total_floors"),
+      land_area_sot: house ? num("land_area_sot") : null,
+      location: $("location").value || null,
+      lat: pin ? pin.lat : null,
+      lng: pin ? pin.lng : null,
+      repair: $("repair").checked,
+      mortgage: $("mortgage").checked,
+      bill_of_sale: $("bill_of_sale").checked,
+      description: $("description").value.trim(),
+    };
+  }
+
+  function fieldsValid() {
+    let ok = true;
+    for (const el of form.querySelectorAll("input[type=number]")) {
+      if (el.closest("[hidden]")) continue;
+      const bad = !el.checkValidity();
+      el.setAttribute("aria-invalid", String(bad));
+      ok = ok && !bad;
+    }
+    return ok;
+  }
+
+  function showError(msg) {
+    $("error").textContent = msg;
+    $("error").hidden = !msg;
+  }
+
+  function estimate() {
+    if (!est) return;
+    if (!fieldsValid()) {
+      showError("Check the highlighted fields: area 10–3000 m², rooms 1–20, floors −2 to 60.");
+      return;
+    }
+    const item = readForm();
+    const errs = est.validate(item);
+    if (errs.length) { showError(errs.map(friendly).join(" ")); return; }
+    showError("");
+    renderResult(est.predict(item), item);
+  }
+
+  function friendly(e) {
+    if (e.startsWith("area_m2: required")) return "Enter the area in m².";
+    if (e.startsWith("floor cannot")) return "The floor can't be above the number of floors in the building.";
+    return e.replace(/^(\w+):/, (_, k) => `${k.replace(/_/g, " ")}:`) + ".";
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    timer = setTimeout(estimate, 120);
+  }
+
+  // ------------------------------------------------------------------ result
+  function renderResult(r, item) {
+    $("loading").hidden = true;
+    $("out").hidden = false;
+    $("example").hidden = edited;
+    $("example").textContent = `Example: ${example.name} · edit the form`;
+    $("price").textContent = money(r.price_azn);
+    $("peek-price").textContent = money(r.price_azn);
+    $("peek-sub").textContent = `${r.premium ? "Premium" : "Standard"} · 80% range ${short(r.price_low_azn)}–${short(r.price_high_azn)}`;
+    $("range").textContent = `80% range: ${money(r.price_low_azn)} – ${money(r.price_high_azn)}`;
+    const span = Math.log(r.price_high_azn) - Math.log(r.price_low_azn);
+    const at = span > 0 ? (100 * (Math.log(r.price_azn) - Math.log(r.price_low_azn))) / span : 50;
+    $("bar-mark").style.left = `${Math.min(100, Math.max(0, at))}%`;
+    const card = est.card();
+    $("trees").textContent = `The middle 80% of the forest's ${card.forest.n_estimators} trees say ` +
+      `${money(r.trees_low_azn)} – ${money(r.trees_high_azn)}. A wide spread means the trees disagree about this listing.`;
+    $("ppm").textContent = money(r.price_per_m2_azn);
+    const tier = $("tier");
+    tier.textContent = r.premium ? "Premium" : "Standard";
+    tier.className = `badge ${r.premium ? "premium" : "standard"}`;
+    const sure = r.inside_margin
+      ? `This listing is inside the SVM's margin, where it was right ${pct(card.acc_inside_margin ?? 0)} of the time on held-out listings.`
+      : `This listing is outside the SVM's margin, where it was right ${pct(card.acc_outside_margin ?? 0)} of the time on held-out listings.`;
+    $("tier-note").textContent = `Premium means above ${money(r.tier_threshold_azn)}, the median training price. ${sure}` +
+      (r.models_agree ? "" : " The price model and the tier model disagree here, so this one is borderline.");
+    renderFactors(r.factors);
+    renderWhatIf(item, r.price_azn);
+    const places = placePrices(item, r.price_azn);
+    renderElsewhere(places);
+    renderMapPrices(places, item);
+    const u = r.location_used;
+    const coords = { "you": "the spot you marked", "typical for location": "typical for this location",
+                     "not known": "not known" }[u.coordinates_from] || u.coordinates_from;
+    $("place-note").textContent = u.location
+      ? `Location: ${[u.district, u.city].filter(Boolean).map(title).join(", ") || "as given"}; coordinates: ${coords}.`
+      : u.lat != null ? "Location: the spot you marked on the map." : "";
+    const ul = $("warnings");
+    ul.replaceChildren(...r.warnings.map((w) => Object.assign(document.createElement("li"), { textContent: w })));
+  }
+
+  const title = (s) => s.replace(/\b\p{L}/gu, (c) => c.toUpperCase());
+  const short = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `${Math.round(v / 1000)}k`);
+
+  function renderFactors(factors) {
+    if (!factors) {
+      $("factors-base").textContent = explainFailed
+        ? "The breakdown could not be downloaded. Reload the page to try again."
+        : `Downloading the breakdown (${(est.m.binary.explain.text_bytes / 2 ** 20).toFixed(0)} MB more)…`;
+      $("factors").replaceChildren();
+      return;
+    }
+    $("factors-base").textContent =
+      `Compared with a typical listing (${money(est.options().typical_price_azn)}), each factor moved the estimate by:`;
+    const max = Math.max(...factors.map((f) => Math.abs(f.log_effect)), 1e-9);
+    $("factors").replaceChildren(...factors.map((f) => {
+      const li = document.createElement("li");
+      const name = Object.assign(document.createElement("span"), { className: "name", textContent: f.factor });
+      const track = Object.assign(document.createElement("span"), { className: "track" });
+      const fill = Object.assign(document.createElement("span"), { className: `fill ${f.log_effect > 0 ? "up" : "down"}` });
+      fill.style.width = `${(50 * Math.abs(f.log_effect)) / max}%`;
+      track.appendChild(fill);
+      const val = Object.assign(document.createElement("span"), {
+        className: "val", textContent: `${f.pct_effect > 0 ? "+" : ""}${f.pct_effect}%` });
+      li.append(name, track, val);
+      return li;
+    }));
+  }
+
+  // ------------------------------------------------------------------ what if
+  /** Up to four one-change variants of the listing, each priced by the forest. */
+  function variants(item) {
+    const out = [];
+    const add = (label, change, apply) => out.push({ label, item: { ...item, ...change }, apply });
+    add(item.repair ? "Without renovation" : "With renovation", { repair: !item.repair },
+      () => { $("repair").checked = !item.repair; });
+    if (item.area_m2 != null && item.area_m2 + 10 <= est.m.limits.area[1])
+      add("10 m² bigger", { area_m2: item.area_m2 + 10 }, () => { $("area_m2").value = String(item.area_m2 + 10); });
+    if (item.rooms != null && item.rooms < est.m.limits.rooms[1])
+      add("One more room", { rooms: item.rooms + 1 }, () => { $("rooms").value = String(item.rooms + 1); });
+    if (item.category === HOUSE && item.land_area_sot != null)
+      add("2 sot more land", { land_area_sot: item.land_area_sot + 2 },
+        () => { $("land_area_sot").value = String(item.land_area_sot + 2); });
+    else
+      add(item.bill_of_sale ? "Without a kupça" : "With a kupça", { bill_of_sale: !item.bill_of_sale },
+        () => { $("bill_of_sale").checked = !item.bill_of_sale; });
+    return out.slice(0, 4);
+  }
+
+  function renderWhatIf(item, price) {
+    $("whatif").replaceChildren(...variants(item).map((v) => {
+      const p = est.quote(v.item);
+      const b = Object.assign(document.createElement("button"), { type: "button", className: "wi" });
+      const d = p == null ? null : 100 * (p / price - 1);
+      const delta = d == null ? "–" : `${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d).toFixed(1)}%`;
+      b.append(
+        Object.assign(document.createElement("span"), { className: "wi-label", textContent: v.label }),
+        Object.assign(document.createElement("span"), { className: `wi-delta ${d > 0 ? "up" : "down"}`, textContent: delta }),
+        Object.assign(document.createElement("span"), { className: "wi-price", textContent: p == null ? "" : money(p) }));
+      b.setAttribute("aria-label", `${v.label}: ${delta}, ${p == null ? "" : money(p)}. Apply this change.`);
+      b.addEventListener("click", () => { v.apply(); markEdited(); estimate(); });
+      return b;
+    }));
+  }
+
+  // ------------------------------------------------------------------ elsewhere
+  /** The listing priced in comparable places, each at its typical coordinates:
+   *  flats across metro areas and districts, houses across the settlements. */
+  function placePrices(item, price) {
+    const house = item.category === HOUSE;
+    const comparable = (key) => (house ? key.endsWith(" q.") : !key.endsWith(" q."));
+    const rows = est.options().locations
+      .filter((l) => l.n_listings >= 50 && l.value !== item.location && comparable(l.value))
+      .map((l) => ({ value: l.value, label: l.label, price: est.quote({ ...item, location: l.value, lat: null, lng: null }) }))
+      .filter((r) => r.price != null);
+    const here = item.location ? est.m.gazetteer[item.location] : null;
+    rows.push({ value: item.location, label: here ? here.label : "Your listing", price, you: true });
+    rows.sort((a, b) => b.price - a.price);
+    return { house, rows };
+  }
+
+  function renderMapPrices({ house, rows }, item) {
+    const byPlace = new Map(rows.filter((r) => r.value).map((r) => [r.value, r.price]));
+    const { lo, hi } = map.setPrices(byPlace, item.location);
+    $("leg-lo").textContent = short(lo);
+    $("leg-hi").textContent = short(hi);
+    $("map-key").textContent = `Colour: what this listing would cost in each ${house ? "settlement" : "metro area and district"}` +
+      ` (grey: ${house ? "city areas, compared for flats" : "suburban settlements, compared for houses"}).`;
+  }
+
+  function renderElsewhere({ house, rows }) {
+    const n = rows.length, at = rows.findIndex((r) => r.you);
+    const keep = new Set([0, 1, 2, 3, n - 3, n - 2, n - 1, at - 1, at, at + 1].filter((i) => i >= 0 && i < n));
+    const max = rows[0].price;
+    const items = [];
+    let last = -1;
+    [...keep].sort((a, b) => a - b).forEach((i) => {
+      if (i > last + 1) items.push(Object.assign(document.createElement("li"), { className: "gap", textContent: "⋯" }));
+      last = i;
+      const r = rows[i];
+      const li = document.createElement("li");
+      if (r.you) { li.className = "you"; li.setAttribute("aria-current", "true"); }
+      const bar = Object.assign(document.createElement("span"), { className: "barwrap" });
+      const fill = Object.assign(document.createElement("span"), { className: "barfill" });
+      fill.style.width = `${(100 * r.price) / max}%`;
+      bar.appendChild(fill);
+      li.append(
+        Object.assign(document.createElement("span"), { className: "rank", textContent: `#${i + 1}` }),
+        placeName(r.label),
+        bar,
+        Object.assign(document.createElement("span"), { className: "amt", textContent: short(r.price) }));
+      li.title = `${r.label}: ${money(r.price)}`;
+      if (!r.you && r.value) {
+        li.tabIndex = 0;
+        li.setAttribute("role", "button");
+        li.setAttribute("aria-label", `Move the listing to ${r.label}: ${money(r.price)}`);
+        const go = () => { $("location").value = r.value; clearPin(true); focusLocation(); markEdited(); estimate(); };
+        li.addEventListener("click", go);
+        li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+      }
+      items.push(li);
+    });
+    $("elsewhere").replaceChildren(...items);
+    $("elsewhere-note").textContent = `#${at + 1} of ${n} ${house ? "settlements" : "metro areas and districts"} ` +
+      "for this listing, each at its typical coordinates. Tap one to move the listing there.";
+  }
+
+  /** "Hezi Aslanov (metro)" -> name, then the kind as a muted tag that is cut first. */
+  function placeName(label) {
+    const m = /^(.*) \((metro|district|settlement)\)$/.exec(label);
+    const el = Object.assign(document.createElement("span"), { className: "name", textContent: m ? m[1] : label });
+    if (m) el.append(Object.assign(document.createElement("small"), { className: "kind", textContent: ` ${m[2]}` }));
+    return el;
+  }
+
+  function markEdited() {
+    if (!edited) { edited = true; renderExamples(); }
+  }
+
+  function renderCard(c) {
+    const rows = [
+      ["Price model", c.price_model],
+      ["Tier model", c.tier_model],
+      ["Test RMSE of log(price)", c.test_rmse_log.toFixed(3)],
+      ["Test R² of log(price)", c.test_r2_log.toFixed(3)],
+      ["Test mean abs. % error", pct(c.test_mape > 1 ? c.test_mape / 100 : c.test_mape)],
+      ["80% range: share of test prices inside", pct(c.interval_coverage)],
+      ["Tier F1 / ROC-AUC on test", `${c.test_f1.toFixed(3)} / ${c.test_roc_auc.toFixed(3)}`],
+      ["Training / test listings", `${azn.format(c.n_dev)} / ${azn.format(c.n_test)}`],
+      ["Trees in the forest", String(c.forest.n_estimators)],
+      ["Trained", `${c.trained_at}${c.fast ? " (fast mode, demo only)" : ""}`],
+    ];
+    const table = document.createElement("table");
+    for (const [k, v] of rows) {
+      const tr = table.insertRow();
+      tr.insertCell().textContent = k;
+      tr.insertCell().textContent = v;
+    }
+    const wrap = Object.assign(document.createElement("div"), { className: "table-wrap" });
+    wrap.appendChild(table);
+    const note = document.createElement("p");
+    note.textContent = "The test listings were held out from training and scored once. The 80% range comes from " +
+      "the forest's out-of-bag errors, so it was calibrated without looking at the test set. This page runs " +
+      "the same trained models as the project's Python app, ported to JavaScript and checked to give the same answers. " +
+      "After the first visit the models are saved in this browser, so they open without downloading again.";
+    $("card").replaceChildren(wrap, note);
+    $("sub").textContent = `Describe a flat or house and get a price from decision trees and an SVM we wrote from ` +
+      `scratch in NumPy, trained on ${azn.format(c.n_dev)} bina.az listings. The models run on your device; ` +
+      `nothing you type is sent anywhere.`;
+  }
+
+  // ------------------------------------------------------------------ map
+  // Land and sea from a public-domain coastline (Natural Earth), one circle per
+  // neighbourhood at its typical coordinates, coloured by what THIS listing
+  // would cost there. Tap a circle to choose it; tap elsewhere to mark a spot.
+  const map = (() => {
+    const canvas = $("map");
+    const ctx = canvas.getContext("2d");
+    const COS = Math.cos((40.4 * Math.PI) / 180);
+    const VIEW = { lat: [40.15, 40.75], lng: [49.3, 50.5] };     // how far you can pan
+    const K_MAX = 30000;
+    let geo = null, places = [], prices = new Map(), lo = 0, hi = 1, selected = null;
+    let onPick = () => {}, onSpot = () => {};
+    let w = 0, h = 0, dpr = 1, kMin = 300, k = 1900;
+    let center = { lat: 40.405, lng: 49.87 };
+
+    const toPx = (lat, lng) => [w / 2 + (lng - center.lng) * k * COS, h / 2 - (lat - center.lat) * k];
+    const toGeo = (x, y) => ({ lat: center.lat - (y - h / 2) / k, lng: center.lng + (x - w / 2) / (k * COS) });
+    const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const hex = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+    const radius = () => (k > 6000 ? 8 : k > 2500 ? 6.5 : 5);
+
+    function shade(price) {                                   // light = cheaper, dark = dearer
+      const a = hex(css("--seq-lo")), b = hex(css("--seq-hi"));
+      const t = hi > lo ? Math.min(1, Math.max(0, (Math.log(price) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)))) : 0.5;
+      return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(",")})`;
+    }
+
+    function clampView() {
+      k = Math.min(K_MAX, Math.max(kMin, k));
+      center.lat = Math.min(VIEW.lat[1], Math.max(VIEW.lat[0], center.lat));
+      center.lng = Math.min(VIEW.lng[1], Math.max(VIEW.lng[0], center.lng));
+    }
+
+    function resize() {
+      dpr = window.devicePixelRatio || 1;
+      w = canvas.clientWidth;
+      h = canvas.clientHeight;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      kMin = Math.min(w / ((VIEW.lng[1] - VIEW.lng[0]) * COS), h / (VIEW.lat[1] - VIEW.lat[0]));
+      clampView();
+      draw();
+    }
+
+    function ring(points) {
+      ctx.beginPath();
+      points.forEach(([lng, lat], i) => { const [x, y] = toPx(lat, lng); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.closePath();
+    }
+
+    function draw() {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = css("--land");
+      ctx.fillRect(0, 0, w, h);
+      if (!geo) return;
+      ctx.fillStyle = css("--water");
+      ctx.strokeStyle = css("--coast");
+      ctx.lineWidth = 1.2;
+      for (const r of geo.water) { ring(r); ctx.fill(); ctx.stroke(); }
+      ctx.fillStyle = css("--land");
+      for (const r of geo.islands) { ring(r); ctx.fill(); ctx.stroke(); }
+      seaLabel();
+
+      // circles: priced places in colour, the rest as small grey rings
+      const r = radius(), surface = css("--surface"), muted = css("--muted"), ink = css("--ink"), ringColor = css("--ring");
+      const shown = [];
+      for (const p of places) {
+        const [x, y] = toPx(p.lat, p.lng);
+        if (x < -20 || y < -20 || x > w + 20 || y > h + 20) continue;
+        const price = prices.get(p.value);
+        ctx.beginPath();
+        if (price != null) {
+          ctx.arc(x, y, r, 0, 2 * Math.PI);
+          ctx.fillStyle = shade(price);
+          ctx.fill();
+          ctx.strokeStyle = ringColor;
+          ctx.lineWidth = 1.25;
+          ctx.stroke();
+        } else {
+          ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
+          ctx.globalAlpha = 0.6;
+          ctx.strokeStyle = muted;
+          ctx.lineWidth = 1.25;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+        shown.push({ p, x, y, priced: price != null });
+      }
+      const sel = shown.find((s) => s.p.value === selected);
+      if (sel) {
+        ctx.beginPath();
+        ctx.arc(sel.x, sel.y, r + 4, 0, 2 * Math.PI);
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+      }
+
+      // labels: the chosen place first, then priced places by listing count;
+      // a label is skipped where it would cover one already placed
+      // labels keep clear of other labels and of the coloured circles' centres (grey dots may be covered)
+      const c = r - 2;
+      const boxes = shown.filter((s) => s.priced).map((s) => ({ x0: s.x - c, x1: s.x + c, y0: s.y - c, y1: s.y + c }));
+      boxes.push({ x0: w - 52, x1: w, y0: 0, y1: 92 },          // zoom buttons
+                 { x0: w - 130, x1: w, y0: h - 32, y1: h });     // scale bar
+      if (pin) boxes.push({ x0: 0, x1: 120, y0: 0, y1: 46 });   // "Remove pin" button
+      const free = (b) => b.x0 >= 2 && b.x1 <= w - 2 && b.y0 >= 2 && b.y1 <= h - 2 &&
+        !boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+      const order = shown.slice().sort((a, b) => (b.p.value === selected) - (a.p.value === selected) ||
+        b.priced - a.priced || b.p.n - a.p.n);
+      let labelled = 0;
+      for (const s of order) {
+        if (!s.priced && s.p.value !== selected && k < 5000) continue;
+        const bold = s.p.value === selected;
+        const price = prices.get(s.p.value);
+        const nameFont = `${bold ? 600 : 400} ${bold ? 13 : 12}px ${css("--body")}`, numFont = `500 11px ${css("--mono")}`;
+        ctx.font = nameFont;
+        const nw = ctx.measureText(s.p.name).width;
+        ctx.font = numFont;
+        const num = price != null ? ` ${short(price)}` : "";
+        const tw = nw + (num ? ctx.measureText(num).width : 0);
+        const gap = r + (bold ? 7 : 4);
+        const tries = [[s.x + gap, s.y + 4], [s.x - gap - tw, s.y + 4], [s.x - tw / 2, s.y - gap - 2], [s.x - tw / 2, s.y + gap + 11],
+                       [s.x + gap - 2, s.y - gap + 2], [s.x + gap - 2, s.y + gap + 8], [s.x - gap - tw + 2, s.y - gap + 2], [s.x - gap - tw + 2, s.y + gap + 8]];
+        for (const [tx, ty] of tries) {
+          const b = { x0: tx - 2, x1: tx + tw + 2, y0: ty - 11, y1: ty + 3 };
+          if (!free(b) && !bold) continue;
+          boxes.push(b);
+          const halo = css("--land");
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = halo;
+          ctx.font = nameFont;
+          ctx.strokeText(s.p.name, tx, ty);
+          ctx.fillStyle = s.priced || bold ? ink : muted;
+          ctx.fillText(s.p.name, tx, ty);
+          if (num) {
+            ctx.font = numFont;
+            ctx.strokeText(num, tx + nw, ty);
+            ctx.fillStyle = muted;
+            ctx.fillText(num, tx + nw, ty);
+          }
+          labelled += 1;
+          break;
+        }
+      }
+
+      canvas.dataset.labels = String(labelled);
+      if (pin) {
+        const [x, y] = toPx(pin.lat, pin.lng);
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = css("--accent");
+        ctx.fill();
+        ctx.strokeStyle = surface;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
+        ctx.fillStyle = surface;
+        ctx.fill();
+      }
+      drawScale(ink);
+    }
+
+    /** "Caspian Sea" in the lowest spot where the whole label sits on visible water. */
+    function seaLabel() {
+      const text = "Caspian Sea";
+      ctx.font = `italic 12px ${css("--body")}`;
+      const tw = ctx.measureText(text).width;
+      const path = new Path2D();
+      for (const r of geo.water) {
+        r.forEach(([lng, lat], i) => { const [x, y] = toPx(lat, lng); i ? path.lineTo(x, y) : path.moveTo(x, y); });
+        path.closePath();
+      }
+      const wet = (x, y) => ctx.isPointInPath(path, x * dpr, y * dpr);
+      for (let y = h - 40; y > 24; y -= 12) {
+        for (let x = 10; x < w - tw - 60; x += 12) {
+          if (wet(x - 4, y - 14) && wet(x + tw + 4, y - 14) && wet(x - 4, y + 6) && wet(x + tw + 4, y + 6)) {
+            ctx.fillStyle = css("--coast");
+            ctx.fillText(text, x, y);
+            return;
+          }
+        }
+      }
+    }
+
+    function drawScale(ink) {
+      const kmPerPx = 111.32 / k;
+      const nice = [0.2, 0.5, 1, 2, 5, 10, 20].find((v) => v / kmPerPx >= 50) || 20;
+      const len = nice / kmPerPx;
+      const x1 = w - 12, x0 = x1 - len, y = h - 10;
+      ctx.strokeStyle = ink;
+      ctx.fillStyle = ink;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x0, y - 4); ctx.lineTo(x0, y); ctx.lineTo(x1, y); ctx.lineTo(x1, y - 4);
+      ctx.stroke();
+      ctx.font = `11px ${css("--mono")}`;
+      ctx.textAlign = "right";
+      ctx.fillText(nice < 1 ? `${nice * 1000} m` : `${nice} km`, x1, y - 6);
+      ctx.textAlign = "left";
+    }
+
+    function zoomAt(factor, x = w / 2, y = h / 2) {
+      const before = toGeo(x, y);
+      k *= factor;
+      clampView();
+      const after = toGeo(x, y);
+      center.lat += before.lat - after.lat;
+      center.lng += before.lng - after.lng;
+      clampView();
+      draw();
+    }
+
+    function show(lat, lng, minZoom) {
+      if (lat < VIEW.lat[0] || lat > VIEW.lat[1] || lng < VIEW.lng[0] || lng > VIEW.lng[1]) return false;
+      const [x, y] = toPx(lat, lng);
+      const margin = 40;
+      if (k < minZoom) k = minZoom;
+      if (x < margin || y < margin || x > w - margin || y > h - margin || k === minZoom) center = { lat, lng };
+      clampView();
+      draw();
+      return true;
+    }
+
+    function tap(x, y) {
+      let best = null, bestD = 18;
+      for (const p of places) {
+        const [px, py] = toPx(p.lat, p.lng);
+        const d = Math.hypot(px - x, py - y);
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      if (best) onPick(best.value);
+      else onSpot(toGeo(x, y));
+    }
+
+    // gestures: drag to pan, pinch to zoom, tap to choose
+    const pointers = new Map();
+    let moved = false, pinch = 0;
+    canvas.addEventListener("pointerdown", (e) => {
+      canvas.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+      if (pointers.size === 1) moved = false;
+      if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = Math.hypot(a.x - b.x, a.y - b.y); moved = true; }
+    });
+    canvas.addEventListener("pointermove", (e) => {
+      const p = pointers.get(e.pointerId);
+      if (!p) return;
+      const dx = e.offsetX - p.x, dy = e.offsetY - p.y;
+      if (pointers.size === 1) {
+        if (!moved && Math.hypot(dx, dy) < 6) return;
+        moved = true;
+        center.lat += dy / k;
+        center.lng -= dx / (k * COS);
+        clampView();
+        p.x = e.offsetX; p.y = e.offsetY;
+        draw();
+      } else if (pointers.size === 2) {
+        p.x = e.offsetX; p.y = e.offsetY;
+        const [a, b] = [...pointers.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinch > 0) zoomAt(d / pinch, (a.x + b.x) / 2, (a.y + b.y) / 2);
+        pinch = d;
+      }
+    });
+    const end = (e) => {
+      const isTap = pointers.size === 1 && !moved && e.type === "pointerup";
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) pinch = 0;
+      if (isTap) tap(e.offsetX, e.offsetY);
+    };
+    canvas.addEventListener("pointerup", end);
+    canvas.addEventListener("pointercancel", end);
+    canvas.addEventListener("keydown", (e) => {
+      const step = 60;
+      const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+      if (moves[e.key]) {
+        const [dx, dy] = moves[e.key];
+        center.lat -= dy / k;
+        center.lng += dx / (k * COS);
+        clampView();
+        draw();
+      } else if (e.key === "+" || e.key === "=") zoomAt(1.6);
+      else if (e.key === "-") zoomAt(1 / 1.6);
+      else if (e.key === "Enter") onSpot({ ...center });
+      else return;
+      e.preventDefault();
+    });
+    $("zoom-in").addEventListener("click", () => zoomAt(1.6));
+    $("zoom-out").addEventListener("click", () => zoomAt(1 / 1.6));
+    new ResizeObserver(resize).observe(canvas);
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+    new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+    function init(coast, gazetteer, handlers) {
+      geo = coast;
+      ({ onPick, onSpot } = handlers);
+      places = Object.entries(gazetteer).filter(([, g]) => g.lat != null).map(([value, g]) => {
+        const m = /^(.*) \((metro|district|settlement)\)$/.exec(g.label);
+        return { value, lat: g.lat, lng: g.lng, n: g.n_listings,
+                 name: m ? (m[2] === "district" ? `${m[1]} district` : m[1]) : g.label };
+      });
+      resize();
+    }
+
+    /** Colour the circles: priceByPlace maps location -> this listing's price there. */
+    function setPrices(priceByPlace, current) {
+      prices = priceByPlace;
+      const v = [...prices.values()];
+      lo = Math.min(...v);
+      hi = Math.max(...v);
+      selected = current;
+      draw();
+      return { lo, hi };
+    }
+
+    return { init, draw, show, setPrices, setSelected: (v) => { selected = v; draw(); } };
+  })();
+
+  function nearestLocation(lat, lng) {
+    let best = null, bestKm = Infinity;
+    for (const [key, g] of Object.entries(est.options().locations.reduce((o, l) => (o[l.value] = l, o), {}))) {
+      if (g.lat == null) continue;
+      const dy = (g.lat - lat) * 111.32, dx = (g.lng - lng) * 111.32 * Math.cos((lat * Math.PI) / 180);
+      const d = Math.hypot(dx, dy);
+      if (d < bestKm) { bestKm = d; best = key; }
+    }
+    return bestKm <= 2 ? best : null;
+  }
+
+  const COORDS_HINT = "Tap a circle to choose that neighbourhood, or tap anywhere else to mark the exact spot. " +
+    "Zoom in to see more names.";
+
+  function setPin(p) {
+    if (!est) return;
+    pin = { lat: Math.round(p.lat * 1e5) / 1e5, lng: Math.round(p.lng * 1e5) / 1e5 };
+    let msg = "Exact spot marked.";
+    if (!$("location").value) {
+      const near = nearestLocation(pin.lat, pin.lng);
+      if (near) {
+        $("location").value = near;
+        map.setSelected(near);
+        msg += ` Neighbourhood set to the nearest one, ${est.m.gazetteer[near].label}; change it if that's wrong.`;
+      }
+    }
+    $("coords").textContent = `${msg} Tap again to move it.`;
+    $("map-clear").hidden = false;
+    markEdited();
+    map.draw();
+    schedule();
+  }
+
+  function clearPin(silent) {
+    pin = null;
+    $("map-clear").hidden = true;
+    $("coords").textContent = COORDS_HINT;
+    map.draw();
+    if (!silent) schedule();
+  }
+
+  /** A circle on the map was tapped: choose that neighbourhood. */
+  function pickPlace(value) {
+    $("location").value = value;
+    clearPin(true);
+    focusLocation();
+    $("coords").textContent = `${est.m.gazetteer[value].label} chosen. ${COORDS_HINT}`;
+    markEdited();
+    estimate();
+  }
+
+  function focusLocation() {
+    const value = $("location").value;
+    const g = est && est.m.gazetteer[value];
+    map.setSelected(value || null);
+    if (g && g.lat != null && !map.show(g.lat, g.lng, 1900))
+      $("coords").textContent = `${g.label} is outside the map area; its typical coordinates are used.`;
+  }
+
+  // ------------------------------------------------------------------ examples
+  function renderExamples() {
+    const row = $("examples");
+    if (!row.children.length) {
+      row.append(...EXAMPLES.map((ex) => {
+        const b = Object.assign(document.createElement("button"), { type: "button", className: "chip", textContent: ex.name });
+        b.addEventListener("click", () => applyExample(ex));
+        return b;
+      }));
+    }
+    [...row.children].forEach((b, i) => {   // update in place so the row keeps its scroll position
+      b.disabled = !est;
+      b.setAttribute("aria-pressed", String(!edited && EXAMPLES[i] === example));
+    });
+  }
+
+  function applyExample(ex) {
+    for (const input of form.querySelectorAll("input[name=category]")) input.checked = input.value === ex.category;
+    syncCategory();
+    const put = (id, v) => { if (v != null) $(id).value = String(v); };
+    put("area_m2", ex.area_m2);
+    $("rooms").value = ex.rooms ?? "";
+    $("floor").value = ex.floor ?? "";
+    $("total_floors").value = ex.total_floors ?? "";
+    put("land_area_sot", ex.land_area_sot);
+    $("location").value = est && est.m.gazetteer[ex.location] ? ex.location : "";
+    $("repair").checked = !!ex.repair;
+    $("bill_of_sale").checked = !!ex.bill_of_sale;
+    $("mortgage").checked = !!ex.mortgage;
+    $("description").value = ex.description;
+    for (const el of form.querySelectorAll("[aria-invalid]")) el.setAttribute("aria-invalid", "false");
+    clearPin(true);
+    focusLocation();
+    example = ex;
+    edited = false;
+    renderExamples();
+    estimate();
+  }
+
+  // phones: a price bar pinned to the bottom while the full answer is off screen
+  function syncPeek() {
+    $("peek").hidden = resultInView;
+  }
+  new IntersectionObserver((entries) => {
+    resultInView = entries[0].isIntersecting;
+    syncPeek();
+  }, { threshold: 0.2 }).observe($("result"));
+  $("peek").addEventListener("click", () => {
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    $("result").scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+  });
+
+  // ------------------------------------------------------------------ start
+  function fillOptions() {
+    const opts = est.options();
+    const allowed = new Set(opts.categories.map((c) => c.value));
+    for (const input of form.querySelectorAll("input[name=category]")) input.closest("label").hidden = !allowed.has(input.value);
+    const sel = $("location");
+    for (const loc of opts.locations) sel.add(new Option(loc.label, loc.value));
+    if (est.m.gazetteer[DEFAULT_LOCATION]) sel.value = DEFAULT_LOCATION;
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = Object.assign(document.createElement("script"), { src, onload: resolve, onerror: reject });
+      document.head.appendChild(s);
+    });
+  }
+
+  form.addEventListener("submit", (e) => { e.preventDefault(); estimate(); });
+  form.addEventListener("input", (e) => {
+    if (e.target.name === "category") syncCategory();
+    markEdited();
+    schedule();
+  });
+  $("location").addEventListener("change", () => { clearPin(true); focusLocation(); });
+  $("map-clear").addEventListener("click", () => clearPin(false));
+  syncCategory();
+  renderExamples();
+
+  (async () => {
+    const mb = (b) => `${(b / 2 ** 20).toFixed(0)} MB`;
+    try {
+      if (typeof DecompressionStream !== "function") await loadScript(PAKO);
+      est = await Estimator.load("", (done, total, cached) => {
+        $("dl-size").textContent = mb(total);
+        $("progress").style.width = `${(100 * done) / total}%`;
+        const msg = cached ? "Opening the models saved on this device…"
+          : done < total ? `Downloading the models… ${mb(done)} of ${mb(total)}` : "Unpacking the models…";
+        $("loading-text").textContent = msg;
+        $("peek-sub").textContent = msg;
+      });
+      fillOptions();
+      renderExamples();
+      renderCard(est.card());
+      map.init(est.m.map, est.m.gazetteer, { onPick: pickPlace, onSpot: setPin });
+      focusLocation();
+      estimate();
+      est.explainReady.then(estimate, () => { explainFailed = true; estimate(); });
+    } catch (err) {
+      $("loading-text").textContent = `The models could not be loaded: ${err.message}. Reload the page to try again.`;
+      $("peek-price").textContent = "Not loaded";
+      $("peek-sub").textContent = "Reload the page to try again";
+    }
+  })();
+})();

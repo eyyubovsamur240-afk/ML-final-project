@@ -21,6 +21,8 @@ jobs:
         run: |
           python -m tests.fake_binaaz /tmp/fake.csv 3000
           python -m app.train --fast --data /tmp/fake.csv --out models/predictor.pkl
+      - name: Export the static site and check the JS port against Python
+        run: python -m app.export_static --out /tmp/site --check 300
 
   docker:
     runs-on: ubuntu-latest
