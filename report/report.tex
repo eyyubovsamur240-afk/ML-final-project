@@ -402,10 +402,12 @@ setting the final model has $\lVert\vect w\rVert=\SVMWNorm$, a margin of
 \SVMMargin{}, and \SVMNSV{} support vectors (\SVMSVFrac{} of the training
 rows).
 
-Fig.~\ref{fig:svmall} (middle) confirms convergence: $J$ falls from \ObjFirst{} at
-$\vect w=0$ to \ObjLast{} and changes by \ObjRelChange{} over the last five
-epochs. Small $\lambda$ converges slowly, as the $1/(\lambda T)$ rate
-predicts, which is why averaging matters. With the same epoch budget,
+Fig.~\ref{fig:svmall} (middle) shows the first \SVMEpochs{} epochs, the
+budget each fit gets in the $\lambda$ sweep. Small $\lambda$ converges
+slowly, as the $1/(\lambda T)$ rate predicts, which is why averaging
+matters and why the chosen $\lambda$ is refit for \SVMFinalEpochs{}
+epochs: over that run $J$ falls from \ObjFirst{} at $\vect w=0$ to
+\ObjLast{} and changes by \ObjRelChange{} over the last five epochs. With the same epoch budget,
 mini-batches of \SVMBatch{} \BatchVerdict{} $k=1$ at a fraction of the
 wall time (\BatchTimes), while full-batch descent, which takes only one
 step per epoch, \FullBatchVerdict. On the full training set,
