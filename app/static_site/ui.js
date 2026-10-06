@@ -12,10 +12,26 @@
   const HOUSE = "heyet evi/bag evi";
   const DEFAULT_LOCATION = "28 may m.";
   const PAKO = "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako_inflate.min.js";
+  // One tap fills the whole form: handy when showing the models on a phone.
+  // The first one matches the form's initial values.
+  const EXAMPLES = [
+    { name: "3-room near 28 May metro", category: "yeni tikili", area_m2: 90, rooms: 3, floor: 7, total_floors: 16,
+      location: "28 may m.", repair: true, bill_of_sale: true, description: "Metroya yaxın, avro təmirli" },
+    { name: "Old 2-room, Nizami", category: "kohne tikili", area_m2: 55, rooms: 2, floor: 3, total_floors: 5,
+      location: "nizami m.", repair: false, bill_of_sale: true, description: "Təcili satılır" },
+    { name: "Sea-view penthouse, Bayil", category: "yeni tikili", area_m2: 180, rooms: 4, floor: 20, total_floors: 20,
+      location: "bayil q.", repair: true, bill_of_sale: true, description: "Dənizə baxan, avro təmirli, qaraj var" },
+    { name: "Garden villa, Mərdəkan", category: "heyet evi/bag evi", area_m2: 250, rooms: 6, land_area_sot: 8,
+      location: "merdekan q.", repair: true, bill_of_sale: true, description: "Bağ evi, hovuzlu" },
+    { name: "First flat, Masazır", category: "yeni tikili", area_m2: 52, rooms: 2, floor: 4, total_floors: 12,
+      location: "masazir q.", repair: false, bill_of_sale: false, mortgage: true, description: "İpoteka ilə alına bilər" },
+  ];
 
   let est = null;
   let pin = null;                // {lat, lng} the user tapped, or null
-  let edited = false;            // false while the form still holds the example listing
+  let edited = false;            // false while the form still holds an example listing
+  let example = EXAMPLES[0];
+  let resultInView = false;      // the full result panel is on screen (phones hide the price bar then)
   let timer = 0;
   let explainFailed = false;
 
@@ -91,7 +107,10 @@
     $("loading").hidden = true;
     $("out").hidden = false;
     $("example").hidden = edited;
+    $("example").textContent = `Example: ${example.name} · edit the form`;
     $("price").textContent = money(r.price_azn);
+    $("peek-price").textContent = money(r.price_azn);
+    $("peek-sub").textContent = `${r.premium ? "Premium" : "Standard"} · 80% range ${short(r.price_low_azn)}–${short(r.price_high_azn)}`;
     $("range").textContent = `80% range: ${money(r.price_low_azn)} – ${money(r.price_high_azn)}`;
     const span = Math.log(r.price_high_azn) - Math.log(r.price_low_azn);
     const at = span > 0 ? (100 * (Math.log(r.price_azn) - Math.log(r.price_low_azn))) / span : 50;
@@ -120,6 +139,7 @@
   }
 
   const title = (s) => s.replace(/\b\p{L}/gu, (c) => c.toUpperCase());
+  const short = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `${Math.round(v / 1000)}k`);
 
   function renderFactors(factors) {
     if (!factors) {
@@ -417,7 +437,7 @@
     }
     $("coords").textContent = `${msg} Tap again to move it.`;
     $("map-clear").hidden = false;
-    edited = true;
+    if (!edited) { edited = true; renderExamples(); }
     map.draw();
     schedule();
   }
@@ -439,6 +459,58 @@
     } else map.setFocus(null);
   }
 
+  // ------------------------------------------------------------------ examples
+  function renderExamples() {
+    const row = $("examples");
+    if (!row.children.length) {
+      row.append(...EXAMPLES.map((ex) => {
+        const b = Object.assign(document.createElement("button"), { type: "button", className: "chip", textContent: ex.name });
+        b.addEventListener("click", () => applyExample(ex));
+        return b;
+      }));
+    }
+    [...row.children].forEach((b, i) => {   // update in place so the row keeps its scroll position
+      b.disabled = !est;
+      b.setAttribute("aria-pressed", String(!edited && EXAMPLES[i] === example));
+    });
+  }
+
+  function applyExample(ex) {
+    for (const input of form.querySelectorAll("input[name=category]")) input.checked = input.value === ex.category;
+    syncCategory();
+    const put = (id, v) => { if (v != null) $(id).value = String(v); };
+    put("area_m2", ex.area_m2);
+    $("rooms").value = ex.rooms ?? "";
+    $("floor").value = ex.floor ?? "";
+    $("total_floors").value = ex.total_floors ?? "";
+    put("land_area_sot", ex.land_area_sot);
+    $("location").value = est && est.m.gazetteer[ex.location] ? ex.location : "";
+    $("repair").checked = !!ex.repair;
+    $("bill_of_sale").checked = !!ex.bill_of_sale;
+    $("mortgage").checked = !!ex.mortgage;
+    $("description").value = ex.description;
+    for (const el of form.querySelectorAll("[aria-invalid]")) el.setAttribute("aria-invalid", "false");
+    clearPin(true);
+    focusLocation();
+    example = ex;
+    edited = false;
+    renderExamples();
+    estimate();
+  }
+
+  // phones: a price bar pinned to the bottom while the full answer is off screen
+  function syncPeek() {
+    $("peek").hidden = resultInView;
+  }
+  new IntersectionObserver((entries) => {
+    resultInView = entries[0].isIntersecting;
+    syncPeek();
+  }, { threshold: 0.2 }).observe($("result"));
+  $("peek").addEventListener("click", () => {
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    $("result").scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+  });
+
   // ------------------------------------------------------------------ start
   function fillOptions() {
     const opts = est.options();
@@ -459,12 +531,13 @@
   form.addEventListener("submit", (e) => { e.preventDefault(); estimate(); });
   form.addEventListener("input", (e) => {
     if (e.target.name === "category") syncCategory();
-    edited = true;
+    if (!edited) { edited = true; renderExamples(); }
     schedule();
   });
   $("location").addEventListener("change", () => { clearPin(true); focusLocation(); });
   $("map-clear").addEventListener("click", () => clearPin(false));
   syncCategory();
+  renderExamples();
 
   (async () => {
     const mb = (b) => `${(b / 2 ** 20).toFixed(0)} MB`;
@@ -476,8 +549,10 @@
         $("loading-text").textContent = done < total
           ? `Downloading the models… ${mb(done)} of ${mb(total)}`
           : "Unpacking the models…";
+        $("peek-sub").textContent = done < total ? `Downloading the models: ${mb(done)} of ${mb(total)}` : "Unpacking the models…";
       });
       fillOptions();
+      renderExamples();
       renderCard(est.card());
       map.init(est.m.density, est.m.gazetteer);
       focusLocation();
@@ -485,6 +560,8 @@
       est.explainReady.then(estimate, () => { explainFailed = true; estimate(); });
     } catch (err) {
       $("loading-text").textContent = `The models could not be loaded: ${err.message}. Reload the page to try again.`;
+      $("peek-price").textContent = "Not loaded";
+      $("peek-sub").textContent = "Reload the page to try again";
     }
   })();
 })();
