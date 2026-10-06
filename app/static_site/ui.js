@@ -88,7 +88,7 @@
     const errs = est.validate(item);
     if (errs.length) { showError(errs.map(friendly).join(" ")); return; }
     showError("");
-    renderResult(est.predict(item));
+    renderResult(est.predict(item), item);
   }
 
   function friendly(e) {
@@ -103,7 +103,7 @@
   }
 
   // ------------------------------------------------------------------ result
-  function renderResult(r) {
+  function renderResult(r, item) {
     $("loading").hidden = true;
     $("out").hidden = false;
     $("example").hidden = edited;
@@ -128,6 +128,8 @@
     $("tier-note").textContent = `Premium means above ${money(r.tier_threshold_azn)}, the median training price. ${sure}` +
       (r.models_agree ? "" : " The price model and the tier model disagree here, so this one is borderline.");
     renderFactors(r.factors);
+    renderWhatIf(item, r.price_azn);
+    renderElsewhere(item, r.price_azn);
     const u = r.location_used;
     const coords = { "you": "the spot you marked", "typical for location": "typical for this location",
                      "not known": "not known" }[u.coordinates_from] || u.coordinates_from;
@@ -166,6 +168,103 @@
     }));
   }
 
+  // ------------------------------------------------------------------ what if
+  /** Up to four one-change variants of the listing, each priced by the forest. */
+  function variants(item) {
+    const out = [];
+    const add = (label, change, apply) => out.push({ label, item: { ...item, ...change }, apply });
+    add(item.repair ? "Without renovation" : "With renovation", { repair: !item.repair },
+      () => { $("repair").checked = !item.repair; });
+    if (item.area_m2 != null && item.area_m2 + 10 <= est.m.limits.area[1])
+      add("10 m² bigger", { area_m2: item.area_m2 + 10 }, () => { $("area_m2").value = String(item.area_m2 + 10); });
+    if (item.rooms != null && item.rooms < est.m.limits.rooms[1])
+      add("One more room", { rooms: item.rooms + 1 }, () => { $("rooms").value = String(item.rooms + 1); });
+    if (item.category === HOUSE && item.land_area_sot != null)
+      add("2 sot more land", { land_area_sot: item.land_area_sot + 2 },
+        () => { $("land_area_sot").value = String(item.land_area_sot + 2); });
+    else
+      add(item.bill_of_sale ? "Without a kupça" : "With a kupça", { bill_of_sale: !item.bill_of_sale },
+        () => { $("bill_of_sale").checked = !item.bill_of_sale; });
+    return out.slice(0, 4);
+  }
+
+  function renderWhatIf(item, price) {
+    $("whatif").replaceChildren(...variants(item).map((v) => {
+      const p = est.quote(v.item);
+      const b = Object.assign(document.createElement("button"), { type: "button", className: "wi" });
+      const d = p == null ? null : 100 * (p / price - 1);
+      const delta = d == null ? "–" : `${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d).toFixed(1)}%`;
+      b.append(
+        Object.assign(document.createElement("span"), { className: "wi-label", textContent: v.label }),
+        Object.assign(document.createElement("span"), { className: `wi-delta ${d > 0 ? "up" : "down"}`, textContent: delta }),
+        Object.assign(document.createElement("span"), { className: "wi-price", textContent: p == null ? "" : money(p) }));
+      b.setAttribute("aria-label", `${v.label}: ${delta}, ${p == null ? "" : money(p)}. Apply this change.`);
+      b.addEventListener("click", () => { v.apply(); markEdited(); estimate(); });
+      return b;
+    }));
+  }
+
+  // ------------------------------------------------------------------ elsewhere
+  /** The listing priced in comparable places, each at its typical coordinates:
+   *  flats across metro areas and districts, houses across the settlements. */
+  function renderElsewhere(item, price) {
+    const house = item.category === HOUSE;
+    const comparable = (key) => (house ? key.endsWith(" q.") : !key.endsWith(" q."));
+    const rows = est.options().locations
+      .filter((l) => l.n_listings >= 50 && l.value !== item.location && comparable(l.value))
+      .map((l) => ({ value: l.value, label: l.label, price: est.quote({ ...item, location: l.value, lat: null, lng: null }) }))
+      .filter((r) => r.price != null);
+    const here = item.location ? est.m.gazetteer[item.location] : null;
+    rows.push({ value: item.location, label: here ? here.label : "Your listing", price, you: true });
+    rows.sort((a, b) => b.price - a.price);
+    const n = rows.length, at = rows.findIndex((r) => r.you);
+    const keep = new Set([0, 1, 2, 3, n - 3, n - 2, n - 1, at - 1, at, at + 1].filter((i) => i >= 0 && i < n));
+    const max = rows[0].price;
+    const items = [];
+    let last = -1;
+    [...keep].sort((a, b) => a - b).forEach((i) => {
+      if (i > last + 1) items.push(Object.assign(document.createElement("li"), { className: "gap", textContent: "⋯" }));
+      last = i;
+      const r = rows[i];
+      const li = document.createElement("li");
+      if (r.you) { li.className = "you"; li.setAttribute("aria-current", "true"); }
+      const bar = Object.assign(document.createElement("span"), { className: "barwrap" });
+      const fill = Object.assign(document.createElement("span"), { className: "barfill" });
+      fill.style.width = `${(100 * r.price) / max}%`;
+      bar.appendChild(fill);
+      li.append(
+        Object.assign(document.createElement("span"), { className: "rank", textContent: `#${i + 1}` }),
+        placeName(r.label),
+        bar,
+        Object.assign(document.createElement("span"), { className: "amt", textContent: short(r.price) }));
+      li.title = `${r.label}: ${money(r.price)}`;
+      if (!r.you && r.value) {
+        li.tabIndex = 0;
+        li.setAttribute("role", "button");
+        li.setAttribute("aria-label", `Move the listing to ${r.label}: ${money(r.price)}`);
+        const go = () => { $("location").value = r.value; clearPin(true); focusLocation(); markEdited(); estimate(); };
+        li.addEventListener("click", go);
+        li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+      }
+      items.push(li);
+    });
+    $("elsewhere").replaceChildren(...items);
+    $("elsewhere-note").textContent = `#${at + 1} of ${n} ${house ? "settlements" : "metro areas and districts"} ` +
+      "for this listing, each at its typical coordinates. Tap one to move the listing there.";
+  }
+
+  /** "Hezi Aslanov (metro)" -> name, then the kind as a muted tag that is cut first. */
+  function placeName(label) {
+    const m = /^(.*) \((metro|district|settlement)\)$/.exec(label);
+    const el = Object.assign(document.createElement("span"), { className: "name", textContent: m ? m[1] : label });
+    if (m) el.append(Object.assign(document.createElement("small"), { className: "kind", textContent: ` ${m[2]}` }));
+    return el;
+  }
+
+  function markEdited() {
+    if (!edited) { edited = true; renderExamples(); }
+  }
+
   function renderCard(c) {
     const rows = [
       ["Price model", c.price_model],
@@ -190,7 +289,8 @@
     const note = document.createElement("p");
     note.textContent = "The test listings were held out from training and scored once. The 80% range comes from " +
       "the forest's out-of-bag errors, so it was calibrated without looking at the test set. This page runs " +
-      "the same trained models as the project's Python app, ported to JavaScript and checked to give the same answers.";
+      "the same trained models as the project's Python app, ported to JavaScript and checked to give the same answers. " +
+      "After the first visit the models are saved in this browser, so they open without downloading again.";
     $("card").replaceChildren(wrap, note);
     $("sub").textContent = `Describe a flat or house and get a price from decision trees and an SVM we wrote from ` +
       `scratch in NumPy, trained on ${azn.format(c.n_dev)} bina.az listings. The models run on your device; ` +
@@ -437,7 +537,7 @@
     }
     $("coords").textContent = `${msg} Tap again to move it.`;
     $("map-clear").hidden = false;
-    if (!edited) { edited = true; renderExamples(); }
+    markEdited();
     map.draw();
     schedule();
   }
@@ -531,7 +631,7 @@
   form.addEventListener("submit", (e) => { e.preventDefault(); estimate(); });
   form.addEventListener("input", (e) => {
     if (e.target.name === "category") syncCategory();
-    if (!edited) { edited = true; renderExamples(); }
+    markEdited();
     schedule();
   });
   $("location").addEventListener("change", () => { clearPin(true); focusLocation(); });
@@ -543,13 +643,13 @@
     const mb = (b) => `${(b / 2 ** 20).toFixed(0)} MB`;
     try {
       if (typeof DecompressionStream !== "function") await loadScript(PAKO);
-      est = await Estimator.load("", (done, total) => {
+      est = await Estimator.load("", (done, total, cached) => {
         $("dl-size").textContent = mb(total);
         $("progress").style.width = `${(100 * done) / total}%`;
-        $("loading-text").textContent = done < total
-          ? `Downloading the models… ${mb(done)} of ${mb(total)}`
-          : "Unpacking the models…";
-        $("peek-sub").textContent = done < total ? `Downloading the models: ${mb(done)} of ${mb(total)}` : "Unpacking the models…";
+        const msg = cached ? "Opening the models saved on this device…"
+          : done < total ? `Downloading the models… ${mb(done)} of ${mb(total)}` : "Unpacking the models…";
+        $("loading-text").textContent = msg;
+        $("peek-sub").textContent = msg;
       });
       fillOptions();
       renderExamples();

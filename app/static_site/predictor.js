@@ -342,15 +342,29 @@
 
     // ---------------------------------------------------------- predict
     /** PricePredictor.predict -> the same fields as the API's PredictionOut. */
+    /** Each tree's log-price for design row x (forest output + the log-area offset). */
+    perTree(x) {
+      const k = this.m.constants;
+      const offset = k.per_m2 ? x[k.log_area_col] : 0.0;
+      const out = new Float64Array(this.nTrees);
+      for (let t = 0; t < this.nTrees; t++) out[t] = this.val[this.leaf(t, x)] + offset;
+      return out;
+    }
+
+    /** The price estimate alone (same number as predict().price_azn, no SVM or
+     *  explanation): cheap enough to run for many variants of a listing. */
+    quote(item) {
+      if (this.validate(item).length) return null;
+      const x = this.transform(this.features(this.frame(item).row));
+      return pyRound(Math.exp(npMean(this.perTree(x))), -2);
+    }
+
     predict(item) {
       const errs = this.validate(item);
       if (errs.length) { const e = new Error(errs.join("; ")); e.details = errs; throw e; }
       const { row, used } = this.frame(item);
       const x = this.transform(this.features(row));
-      const k = this.m.constants;
-      const offset = k.per_m2 ? x[k.log_area_col] : 0.0;
-      const perTree = new Float64Array(this.nTrees);
-      for (let t = 0; t < this.nTrees; t++) perTree[t] = this.val[this.leaf(t, x)] + offset;
+      const perTree = this.perTree(x);
       const logPrice = npMean(perTree);
       const tLo = Math.exp(npQuantile(perTree, 0.10)), tHi = Math.exp(npQuantile(perTree, 0.90));
       const score = this.svmScore(x);
@@ -415,22 +429,26 @@
     return out;
   }
 
-  /** Download one stream's files (gzip, base64 text), join, gunzip. */
-  async function fetchStream(base, stream, onProgress) {
+  /** Download one stream's files (gzip, base64 text) and join them. */
+  async function fetchPacked(base, stream, onProgress) {
     let done = 0;
-    onProgress(0, stream.text_bytes);
+    onProgress(0, stream.text_bytes, false);
     const chunks = await Promise.all(stream.files.map(async (name) => {
       const res = await fetch(`${base}${name}`);
       if (!res.ok) throw new Error(`could not download ${name} (${res.status})`);
       const text = await res.text();
       done += text.length;
-      onProgress(done, stream.text_bytes);
+      onProgress(done, stream.text_bytes, false);
       return fromBase64(text);
     }));
     const packed = new Uint8Array(stream.bytes);
     let off = 0;
     for (const c of chunks) { packed.set(c, off); off += c.byteLength; }
     if (off !== stream.bytes) throw new Error("the model data is incomplete");
+    return packed;
+  }
+
+  async function gunzipChecked(packed, stream) {
     const raw = await gunzip(packed);
     if (raw.byteLength !== stream.raw_bytes) throw new Error("the model data is incomplete");
     return raw;
@@ -439,16 +457,72 @@
   /**
    * Browser loader: fetch model.json and the model files published next to the
    * page. Resolves as soon as estimates work; est.explainReady resolves once the
-   * explanation data has arrived too. onProgress(bytesDone, bytesTotal) follows
-   * the first download.
+   * explanation data has arrived too. onProgress(bytesDone, bytesTotal, fromCache)
+   * follows the first download.
    */
   async function load(base = "", onProgress = () => {}) {
     const res = await fetch(`${base}model.json`);
     if (!res.ok) throw new Error(`could not download model.json (${res.status})`);
     const meta = await res.json();
-    const est = new Estimator(meta, await fetchStream(base, meta.binary.core, onProgress));
-    est.explainReady = fetchStream(base, meta.binary.explain, () => {}).then((raw) => est.attachExplain(raw));
+    // The model files are cached on the device after the first visit, keyed by
+    // the exact files, so a retrained model is downloaded again.
+    const model = `${meta.card.trained_at}|${meta.card.data_sha256}|`;
+    const key = (stream) => `${model}${stream.files.join(",")}|${stream.bytes}`;
+    const get = async (stream, progress) => {
+      const cached = await cacheGet(key(stream));
+      if (cached && cached.byteLength === stream.bytes) {
+        progress(stream.text_bytes, stream.text_bytes, true);
+        return gunzipChecked(cached, stream);
+      }
+      const packed = await fetchPacked(base, stream, progress);
+      cachePut(key(stream), packed, model);    // fire and forget
+      return gunzipChecked(packed, stream);
+    };
+    const est = new Estimator(meta, await get(meta.binary.core, onProgress));
+    est.explainReady = get(meta.binary.explain, () => {}).then((raw) => est.attachExplain(raw));
     return est;
+  }
+
+  // ------------------------------------------------------------ device cache
+  // IndexedDB can be missing, full, blocked (private mode) or slow to answer:
+  // every failure falls back to the network, and no call waits more than 3 s.
+  const DB = "estimator-cache", STORE = "streams";
+  function idb(mode, work) {
+    return new Promise((resolve) => {
+      const done = (v) => { clearTimeout(timer); resolve(v); };
+      const timer = setTimeout(() => resolve(null), 3000);
+      try {
+        const open = indexedDB.open(DB, 1);
+        open.onupgradeneeded = () => open.result.createObjectStore(STORE);
+        open.onerror = () => done(null);
+        open.onsuccess = () => {
+          try {
+            const tx = open.result.transaction(STORE, mode);
+            const req = work(tx.objectStore(STORE));
+            tx.oncomplete = () => { done(req ? req.result : true); open.result.close(); };
+            tx.onerror = tx.onabort = () => { done(null); open.result.close(); };
+          } catch (e) { done(null); }
+        };
+      } catch (e) { done(null); }
+    });
+  }
+  async function cacheGet(key) {
+    if (typeof indexedDB === "undefined") return null;
+    const v = await idb("readonly", (store) => store.get(key));
+    return v instanceof ArrayBuffer ? new Uint8Array(v) : v instanceof Uint8Array ? v : null;
+  }
+  /** Store one stream; files of other (older) models are removed. */
+  async function cachePut(key, bytes, model) {
+    if (typeof indexedDB === "undefined") return;
+    const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    return idb("readwrite", (store) => {
+      const keys = store.getAllKeys();
+      keys.onsuccess = () => {
+        for (const k of keys.result) if (!String(k).startsWith(model)) store.delete(k);
+        store.put(buf, key);
+      };
+      return null;
+    });
   }
 
   return { Estimator, load, _internals: { unpack, fromBase64, pairwiseSum, npMean, npQuantile, pyRound, transliterate, fmtG } };

@@ -20,6 +20,7 @@
   --standard: #2c5277; --standard-bg: #e1ebf5;
   --warn-bg: #fbf1dc; --err: #b42318;
   --map-bg: #e4ebea; --map-dot: #142120;
+  --bar-muted: #8dbab5;
   --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
   --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
@@ -30,7 +31,7 @@
     --bg: #0d1414; --surface: #141e1e; --ink: #e2ebe9; --muted: #92a4a1; --line: #263534;
     --field: #0f1818; --accent: #4cb5ad; --accent-ink: #062120; --accent-soft: #173533;
     --premium: #f1c26b; --premium-bg: #392b10; --standard: #9cc3ea; --standard-bg: #172a3d;
-    --warn-bg: #33270f; --err: #ff8a80; --map-bg: #101a1a; --map-dot: #e2ebe9;
+    --warn-bg: #33270f; --err: #ff8a80; --map-bg: #101a1a; --map-dot: #e2ebe9; --bar-muted: #3a6b67;
     color-scheme: dark;
   }
 }
@@ -38,7 +39,7 @@
   --bg: #0d1414; --surface: #141e1e; --ink: #e2ebe9; --muted: #92a4a1; --line: #263534;
   --field: #0f1818; --accent: #4cb5ad; --accent-ink: #062120; --accent-soft: #173533;
   --premium: #f1c26b; --premium-bg: #392b10; --standard: #9cc3ea; --standard-bg: #172a3d;
-  --warn-bg: #33270f; --err: #ff8a80; --map-bg: #101a1a; --map-dot: #e2ebe9;
+  --warn-bg: #33270f; --err: #ff8a80; --map-bg: #101a1a; --map-dot: #e2ebe9; --bar-muted: #3a6b67;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -147,6 +148,34 @@ h3 { margin: 18px 0 2px; font: 600 15px/1.3 var(--body); }
 .peek-price { font: 700 24px/1.1 var(--display); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 .peek-sub { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .peek-go { flex: none; font: 600 14px var(--body); color: var(--accent-ink); background: var(--accent); padding: 9px 14px; border-radius: 999px; }
+.whatif { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.wi { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border-radius: 10px; cursor: pointer;
+  font: inherit; color: var(--ink); background: var(--field); border: 1px solid var(--line); min-width: 0; }
+.wi:hover { border-color: var(--accent); }
+.wi-label { font-size: 14px; font-weight: 500; }
+.wi-delta { font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
+.wi-delta.up { color: var(--accent); }
+.wi-delta.down { color: var(--muted); }
+.wi-price { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.elsewhere { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 2px; }
+.elsewhere li { display: grid; grid-template-columns: 2.2em minmax(0, 9.5em) minmax(0, 1fr) 4.2em; gap: 8px; align-items: center;
+  font-size: 14px; padding: 5px 4px; border-radius: 8px; cursor: pointer; }
+.elsewhere li:hover { background: var(--field); }
+.elsewhere li.gap { cursor: default; color: var(--muted); padding-block: 0; }
+.elsewhere li.gap:hover { background: none; }
+.elsewhere .rank { color: var(--muted); font: 400 12px var(--mono); }
+.elsewhere .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.elsewhere .kind { color: var(--muted); font-size: 12px; font-weight: 400; }
+.elsewhere .barwrap { height: 8px; }
+.elsewhere .barfill { display: block; height: 8px; border-radius: 0 4px 4px 0; background: var(--bar-muted); }
+.elsewhere li.you { font-weight: 600; background: var(--accent-soft); }
+.elsewhere li.you .barfill { background: var(--accent); }
+.elsewhere .amt { text-align: right; font: 500 13px var(--mono); font-variant-numeric: tabular-nums; }
+@media (max-width: 860px) {
+  .page { padding-block-start: 18px; }
+  .top { margin-bottom: 16px; }
+  .sub { font-size: 15px; }
+}
 .about { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; font-size: 14px; }
 .about summary { cursor: pointer; font-weight: 600; }
 .table-wrap { overflow-x: auto; }
@@ -224,7 +253,7 @@ h3 { margin: 18px 0 2px; font: 600 15px/1.3 var(--body); }
       <div class="loading" id="loading">
         <p class="label" id="loading-text">Downloading the models…</p>
         <div class="progress" aria-hidden="true"><span id="progress"></span></div>
-        <p class="hint">One download of about <span id="dl-size">25 MB</span>, then every estimate is instant and offline.</p>
+        <p class="hint">A one-time download of about <span id="dl-size">15 MB</span>. The models are then saved on this device, so the next visit opens at once.</p>
       </div>
       <div id="out" hidden>
         <span class="example" id="example">Example · edit the form</span>
@@ -238,9 +267,15 @@ h3 { margin: 18px 0 2px; font: 600 15px/1.3 var(--body); }
           <div><dt>Tier</dt><dd><span class="badge" id="tier"></span></dd></div>
         </dl>
         <p class="note" id="tier-note"></p>
+        <h3>What if…</h3>
+        <p class="hint">The same listing with one change. Tap to apply it.</p>
+        <div class="whatif" id="whatif"></div>
         <h3>What drove this price</h3>
         <p class="hint" id="factors-base"></p>
         <ul class="factors" id="factors"></ul>
+        <h3>The same listing elsewhere</h3>
+        <p class="hint" id="elsewhere-note"></p>
+        <ol class="elsewhere" id="elsewhere"></ol>
         <p class="note" id="place-note"></p>
         <ul class="warnings" id="warnings"></ul>
       </div>

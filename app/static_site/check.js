@@ -41,6 +41,7 @@ for (const [i, { input, expected }] of cases.entries()) {
   }
   const bad = [];
   let same = true;
+  if (est.quote(input) !== got.price_azn) bad.push(`quote(): ${est.quote(input)} vs predict(): ${got.price_azn}`);
   for (const [key, unit] of Object.entries(UNIT)) {
     const d = Math.abs(got[key] - expected[key]);
     maxDiff[key] = Math.max(maxDiff[key] || 0, d);
