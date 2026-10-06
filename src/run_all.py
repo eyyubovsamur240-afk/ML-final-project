@@ -69,6 +69,7 @@ def main(argv=None) -> dict:
     s = ex.Settings.make(args.fast, figures_dir)
     plots.setup_style()
     R: dict = {"settings": {"fast": args.fast, "seed": config.SEED, "svm_epochs": s.svm_epochs,
+                            "svm_final_epochs": s.svm_final_epochs,
                             "svm_batch": s.svm_batch, "rff_components": s.rff_components,
                             "forest_trees": s.forest_trees, "boost_trees": s.boost_trees,
                             "kmeans_k": config.KMEANS_K, "cv_folds": s.cv_folds, "n_boot": s.n_boot}}

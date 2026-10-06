@@ -65,7 +65,10 @@ TREE_MIN_DECREASE_GRID = [0.0, 1e-5, 1e-4, 1e-3, 1e-2]
 LEARNING_CURVE_FRACTIONS = [0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0]
 
 SVM_LAMBDAS = [1e-6, 3e-6, 1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1]
-SVM_EPOCHS = 50
+SVM_EPOCHS = 50            # per fit in the lambda sweep and the convergence studies
+# The chosen lambda is refit for longer: at small lambda the 1/(lambda t) rate needs many
+# steps (lambda=1e-4: 50 epochs end 19.8% above LIBLINEAR's optimum, 500 end within 0.4%).
+SVM_FINAL_EPOCHS = 500
 SVM_BATCH = 32
 SVM_AVERAGE = True          # t-weighted iterate averaging (see src/svm.py)
 RFF_GAMMAS = [0.001, 0.003, 0.01, 0.03]           # RBF bandwidth k(x,z)=exp(-g||x-z||^2); 0.001 wins with the ~300 tag-augmented features
@@ -99,6 +102,7 @@ FAST = {
     "max_rows": 4_000,
     "tree_depths": list(range(1, 13)),
     "svm_epochs": 8,
+    "svm_final_epochs": 8,
     "svm_lambdas": [1e-5, 1e-4, 1e-3, 1e-2],
     "rff_gammas": [0.01, 0.1],
     "rff_lambdas": [1e-5, 1e-4],

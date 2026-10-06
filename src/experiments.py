@@ -100,6 +100,7 @@ class Settings:
     min_decrease_grid: list = field(default_factory=lambda: list(config.TREE_MIN_DECREASE_GRID))
     svm_lambdas: list = field(default_factory=lambda: list(config.SVM_LAMBDAS))
     svm_epochs: int = config.SVM_EPOCHS
+    svm_final_epochs: int = config.SVM_FINAL_EPOCHS
     svm_batch: int = config.SVM_BATCH
     svm_average: bool = config.SVM_AVERAGE
     rff_gammas: list = field(default_factory=lambda: list(config.RFF_GAMMAS))
@@ -122,6 +123,7 @@ class Settings:
             s.min_leaf_grid = [1, 5, 20, 50]
             s.min_decrease_grid = [0.0, 1e-4, 1e-2]
             s.svm_lambdas, s.svm_epochs = f["svm_lambdas"], f["svm_epochs"]
+            s.svm_final_epochs = f["svm_final_epochs"]
             s.rff_gammas, s.rff_lambdas = f["rff_gammas"], f["rff_lambdas"]
             s.rff_components, s.rff_component_grid = f["rff_components"], f["rff_component_grid"]
             s.forest_trees, s.boost_trees = f["forest_trees"], f["boost_trees"]
@@ -391,7 +393,7 @@ def svm_studies(data: Data, s: Settings) -> dict:
         conv_sched[label] = (m.history_["epoch"], m.history_["objective"])
 
     # chosen model: margin, support vectors, weights
-    final = PegasosSVM(lambda_=lam, n_epochs=s.svm_epochs, batch_size=s.svm_batch,
+    final = PegasosSVM(lambda_=lam, n_epochs=s.svm_final_epochs, batch_size=s.svm_batch,
                        average=s.svm_average, random_state=SEED).fit(Z_tr, t_tr)
     J = final.history_["objective"]
 
@@ -473,7 +475,7 @@ def clf_models(tree_cfg, svm_lam, rff_cfg, s: Settings, n_fit: int):
     return {
         "Ours: decision tree": ("X", lambda: DecisionTree("classification", crit, random_state=SEED, **kw)),
         "sklearn DecisionTreeClassifier": ("X", lambda: DecisionTreeClassifier(criterion=crit, random_state=SEED, **kw)),
-        "Ours: linear SVM (Pegasos)": ("Z", lambda: PegasosSVM(lambda_=svm_lam, n_epochs=s.svm_epochs,
+        "Ours: linear SVM (Pegasos)": ("Z", lambda: PegasosSVM(lambda_=svm_lam, n_epochs=s.svm_final_epochs,
                                                                batch_size=s.svm_batch, random_state=SEED,
                                                                average=s.svm_average,
                                                                record_objective=False)),

@@ -621,6 +621,7 @@ def write_all(R: dict, results_dir: Path, tex_dir: Path) -> None:
     rc = conv.get("rel_change_last_5_epochs")
     T.macro("ObjRelChange", "--" if rc is None else pct(rc, 2))
     T.macro("SVMEpochs", str(R["settings"]["svm_epochs"]))
+    T.macro("SVMFinalEpochs", str(R["settings"].get("svm_final_epochs", R["settings"]["svm_epochs"])))
     T.macro("SVMBatch", str(R["settings"]["svm_batch"]))
     bt = conv["batch_timings_s"]
     T.macro("BatchTimes", tex_escape("; ".join(f"{k}: {v:.2f}s" for k, v in bt.items())))
