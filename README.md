@@ -27,7 +27,7 @@ kaggle datasets download -d sehriyarmemmedli/binaaz-sale-project -p data --unzip
 # 2. sanity: unit tests (no dataset needed, ~5 s)
 python -m pytest -q
 
-# 3. reproduce everything (~30–40 min on a 4-core laptop; --fast for a 1-minute smoke run)
+# 3. reproduce everything (about 2 h on 4 CPU cores; --fast for a 1-minute smoke run)
 python -m src.run_all
 
 # 4. build the report and slides (needs a LaTeX install: pdflatex)
@@ -56,18 +56,19 @@ From `python -m src.run_all` on `house_sale.csv` (SHA-256 `b6a4c67e0d3c…`): 10
 
 | Model | Task A: test RMSE of log(price) (5-fold CV) | Task B: test F1 (5-fold CV) |
 |---|---|---|
-| Our decision tree | 0.229 (0.239 ± 0.004) | 0.926 (0.923 ± 0.003) |
-| sklearn DecisionTree* | 0.229 | 0.928 |
-| Our linear SVM (Pegasos) | – | 0.912 (0.911 ± 0.004) |
-| sklearn LinearSVC | – | 0.911 |
-| Our RBF SVM (RFF + Pegasos) | – | 0.914 |
-| sklearn SVC (RBF) | – | 0.918 |
-| Our ridge (bonus) | 0.237 | – |
-| Our random forest (bonus) | 0.180 (sklearn 0.181) | 0.945 (sklearn 0.944) |
+| Our decision tree | 0.224 (0.232 ± 0.003) | 0.925 (0.923 ± 0.003) |
+| sklearn DecisionTree* | 0.224 | 0.925 |
+| Our linear SVM (Pegasos) | – | 0.915 (0.917 ± 0.003) |
+| sklearn LinearSVC | – | 0.915 |
+| Our RBF SVM (RFF + Pegasos) | – | 0.910 (0.913 ± 0.003) |
+| sklearn SVC (RBF) | – | 0.911 |
+| Our ridge (bonus) | 0.231 | – |
+| Our gradient boosting (bonus) | 0.200 | – |
+| Our random forest (bonus) | 0.174 (sklearn 0.174) | 0.945 (sklearn 0.942) |
 | Constant baseline (train median) | 0.628 | – |
 
 * Our tree makes the same split as scikit-learn at every node except exact ties and float32 effects
-  (0 unexplained differences); averaged Pegasos reaches LIBLINEAR's objective within 0.61%.
+  (0 unexplained differences); averaged Pegasos reaches LIBLINEAR's objective within 0.40%.
 * Errors are largest for houses/villas, for districts with few listings, and in both price tails.
   Tier errors concentrate at the boundary: 42% of the tree's misclassifications are listings
   priced within ±10% of the threshold, a band holding only 11% of test listings.
@@ -93,6 +94,7 @@ From `python -m src.run_all` on `house_sale.csv` (SHA-256 `b6a4c67e0d3c…`): 10
 │   ├── linear.py             #   bonus: ridge via normal equations
 │   ├── svr.py                #   bonus: epsilon-insensitive SVR (Pegasos step, + RFF kernel)
 │   ├── scaling.py            #   fit/predict time vs training size, empirical exponents
+│   ├── explain.py            #   permutation importance and error breakdown by price band / district
 │   ├── ensemble.py           #   bonus: random forest + gradient boosting from OUR trees
 │   ├── clustering.py         #   bonus: k-means++ and PCA from scratch
 │   ├── experiments.py        #   the study / selection / test / CV / analysis stages
@@ -148,8 +150,8 @@ LIBLINEAR's exact optimum.
 ## Web interface
 
 A small web app lets anyone price a listing with our own models: the
-**random forest of our CART trees** for the price (test RMSE 0.180 on log
-price) and the **RFF Pegasos SVM** for premium vs standard (test ROC-AUC 0.974).
+**random forest of our CART trees** for the price (test RMSE 0.174 on log
+price) and the **RFF Pegasos SVM** for premium vs standard (test ROC-AUC 0.972).
 
 ![The price estimator](docs/interface.png)
 
