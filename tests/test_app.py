@@ -47,7 +47,15 @@ def test_factors_add_up_to_the_prediction(model):
     df, _ = model._frame(item)
     X = model.pre_.transform(dp.make_features(df)[0])
     total = model.baseline_log_ + sum(f["log_effect"] for f in model.explain(X[0], top=999))
-    assert total == pytest.approx(model.forest_.predict(X)[0], abs=1e-3)
+    assert total == pytest.approx(np.log(model.predict(item).price_azn), abs=2e-3)   # rounding to 100 AZN
+
+
+def test_location_brings_its_tags(model):
+    """A chosen location fills in its typical metro / landmark tags."""
+    loc = next(k for k, v in model.gazetteer_.items() if v.get("tags"))
+    df, _ = model._frame(Listing(**FLAT, location=loc))
+    assert df["tags"].iloc[0] == model.gazetteer_[loc]["tags"]
+    assert any(n.startswith("tags=") for n in model.pre_.feature_names_)
 
 
 def test_bigger_flat_costs_more(model):

@@ -4,8 +4,9 @@ predictor.py — the serving model behind the web interface.
 ``PricePredictor`` bundles everything needed to price ONE listing typed in
 by a person, using the project's own from-scratch models:
 
-  * Task A (price):  ``RandomForest`` of our CART trees on log(price) — the
-    best Task A model in the report (bonus section).
+  * Task A (price):  ``RandomForest`` of our CART trees on log(price per m²),
+    plus the listing's log(area) — the best Task A model in the report
+    (bonus section).
   * Task B (tier):   ``RFFPegasosSVM`` — Pegasos on random Fourier features,
     the best Task B model by ROC-AUC.
 
@@ -44,8 +45,9 @@ DEFAULT_MODEL_PATH = config.ROOT / "models" / "predictor.pkl"
 # Hyperparameters: the configurations the full run selected on VALIDATION
 # data (results/metrics.json -> svm.best_rff, bonus.ensembles). Kept here,
 # not re-searched, so training the app takes minutes, not half an hour.
-FOREST = dict(n_estimators=config.FOREST_TREES, max_features=1 / 3, min_samples_leaf=2)
-RFF_SVM = dict(gamma=0.003, lambda_=1e-6, n_components=config.RFF_COMPONENTS,
+FOREST = dict(n_estimators=config.FOREST_TREES, max_features=1 / 3,
+              min_samples_leaf=config.FOREST_MIN_LEAF)
+RFF_SVM = dict(gamma=0.001, lambda_=1e-6, n_components=config.RFF_COMPONENTS,
                n_epochs=config.SVM_EPOCHS, batch_size=config.SVM_BATCH,
                average=config.SVM_AVERAGE)
 FAST_FOREST = dict(n_estimators=8, max_features=1 / 3, min_samples_leaf=2)
@@ -74,8 +76,10 @@ FACTOR_LABELS = {
     "kw_metro": "Listing text", "kw_sea": "Listing text", "kw_furnished": "Listing text",
     "kw_urgent": "Listing text", "kw_euro_reno": "Listing text", "kw_parking": "Listing text",
     "category": "Property type", "building_type": "Building type", "city": "City",
-    "district": "District", "location": "Neighbourhood",
+    "district": "District", "location": "Neighbourhood", "tags": "Metro / landmarks nearby",
 }
+# The Preprocessor puts the numeric features first, so log(area) has a fixed column.
+LOG_AREA_COL = dp.NUMERIC_FEATURES.index("log_area")
 
 
 def location_label(key: str) -> str:
@@ -200,11 +204,15 @@ class PricePredictor:
         tier_dev, self.threshold_ = dp.make_tier_label(price[dev])
         tier_te, _ = dp.make_tier_label(price[te], self.threshold_)
 
+        # Trees learn log(price per m²) and add the row's own log(area) back
+        # (config.PER_M2_TARGET, as in experiments.PerM2Target).
+        self.per_m2_ = bool(config.PER_M2_TARGET)
+        y_fit = y_dev - self._offset(X_dev)
         forest_kw = FAST_FOREST if fast else FOREST
         svm_kw = FAST_RFF_SVM if fast else RFF_SVM
         t0 = time.perf_counter()
         log(f"Fitting random forest ({forest_kw['n_estimators']} trees) on {len(dev):,} listings")
-        self.forest_ = RandomForest("regression", random_state=seed, **forest_kw).fit(X_dev, y_dev)
+        self.forest_ = RandomForest("regression", random_state=seed, **forest_kw).fit(X_dev, y_fit)
         t1 = time.perf_counter()
         log(f"  done in {t1 - t0:.0f}s. Fitting RFF Pegasos SVM")
         self.svm_ = RFFPegasosSVM(random_state=seed, record_objective=False,
@@ -215,12 +223,12 @@ class PricePredictor:
         # --- 80% price range: split-conformal on OUT-OF-BAG residuals of the
         # dev rows, so the test split stays untouched and its coverage below
         # is a real check, not true by construction.
-        resid_oob = y_dev - oob_predict(self.forest_, X_dev, y_dev, seed)
+        resid_oob = y_fit - oob_predict(self.forest_, X_dev, y_fit, seed)
         resid_oob = resid_oob[np.isfinite(resid_oob)]
         self.interval_ = conformal_quantiles(resid_oob, coverage=0.80)
 
         # --- honest numbers for the interface, from the untouched test split
-        pred_te = self.forest_.predict(X_te)
+        pred_te = self.forest_.predict(X_te) + self._offset(X_te)
         resid = y_te - pred_te
         score_te = self.svm_.decision_function(Z_te)
         tier_pred = (score_te >= 0).astype(int)
@@ -236,13 +244,18 @@ class PricePredictor:
             "n_dev": int(len(dev)), "n_test": int(len(te)),
             "fit_seconds": {"forest": t1 - t0, "svm": t2 - t1},
         }
+        self.log_area_ref_ = float(np.median(X_dev[:, LOG_AREA_COL])) if self.per_m2_ else 0.0
         self._fit_reference(cleaned.iloc[dev], feats.iloc[dev])
         _strip_for_serving(self.forest_)
         self.meta_ = {"bundle_version": BUNDLE_VERSION, "fast": fast, "seed": seed,
                       "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                       "python": platform.python_version(),
-                      "forest": forest_kw, "svm": svm_kw}
+                      "forest": forest_kw, "svm": svm_kw, "per_m2_target": self.per_m2_}
         return self
+
+    def _offset(self, X: np.ndarray) -> np.ndarray | float:
+        """log(area) for a per-m² forest, else 0: forest output + offset = log(price)."""
+        return X[:, LOG_AREA_COL] if getattr(self, "per_m2_", False) else 0.0
 
     def _fit_reference(self, df_dev: pd.DataFrame, feats_dev: pd.DataFrame) -> None:
         """Gazetteer (typical district/city/coordinates per location) and the
@@ -258,6 +271,7 @@ class PricePredictor:
                 "lat": None if np.isnan(lat) else round(float(lat), 5),
                 "lng": None if np.isnan(lng) else round(float(lng), 5),
                 "n_listings": int(len(rows)),
+                "tags": mode(rows["tags"]) if "tags" in rows else None,
             }
         self.gazetteer_ = dict(sorted(gaz.items(), key=lambda kv: kv[1]["label"]))
         self.ranges_ = {c: (float(feats_dev[c].quantile(0.005)), float(feats_dev[c].quantile(0.995)))
@@ -280,6 +294,7 @@ class PricePredictor:
             "category": item.category, "building_type": np.nan,
             "city": (place or {}).get("city", np.nan), "location": item.location or np.nan,
             "district": (place or {}).get("district", np.nan),
+            "tags": (place or {}).get("tags") or "",
             "description": item.description or "",
         }
         df = pd.DataFrame([row]).astype({c: float for c in (
@@ -313,7 +328,8 @@ class PricePredictor:
         df, used = self._frame(item)
         feats, _, _ = dp.make_features(df)
         X = self.pre_.transform(feats)
-        per_tree = np.array([t.predict(X)[0] for t in self.forest_.trees_])
+        offset = float(np.atleast_1d(self._offset(X))[0])
+        per_tree = np.array([t.predict(X)[0] for t in self.forest_.trees_]) + offset
         log_price = float(per_tree.mean())          # == RandomForest.predict
         t_lo, t_hi = np.exp(np.quantile(per_tree, [0.10, 0.90]))
         score = float(self.svm_.decision_function(self.scaler_.transform(X))[0])
@@ -335,8 +351,10 @@ class PricePredictor:
     @property
     def baseline_log_(self) -> float:
         """The forest's starting point: mean log-price of the training rows
-        (each tree's root value, averaged)."""
-        return float(np.mean([t.tree_value_[0] for t in self.forest_.trees_]))
+        (each tree's root value, averaged). For a per-m² forest the root is a
+        log price per m², so the median listing's log(area) is added."""
+        return float(np.mean([t.tree_value_[0] for t in self.forest_.trees_])) \
+            + getattr(self, "log_area_ref_", 0.0)
 
     def explain(self, x: np.ndarray, top: int = 6) -> list[dict]:
         """
@@ -357,6 +375,8 @@ class PricePredictor:
                 contrib[f] += t.tree_value_[child] - t.tree_value_[node]
                 node = child
         contrib /= len(self.forest_.trees_)
+        if getattr(self, "per_m2_", False):    # the area offset: this flat vs the median one
+            contrib[LOG_AREA_COL] += x[LOG_AREA_COL] - self.log_area_ref_
         grouped: dict[str, float] = {}
         for name, c in zip(self.pre_.feature_names_, contrib):
             base = name.split("=")[0].removesuffix("_missing")
@@ -382,7 +402,9 @@ class PricePredictor:
         r, c = self.metrics_["regression"], self.metrics_["classification"]
         return {
             **self.meta_,
-            "price_model": "Random forest of our from-scratch CART trees on log(price)",
+            "price_model": ("Random forest of our from-scratch CART trees on log(price per m²), times the area"
+                            if getattr(self, "per_m2_", False) else
+                            "Random forest of our from-scratch CART trees on log(price)"),
             "tier_model": "RBF-kernel SVM: random Fourier features + our Pegasos solver",
             "test_rmse_log": r["rmse_log"], "test_r2_log": r["r2_log"], "test_mape": r["mape"],
             "test_f1": c["f1"], "test_roc_auc": c["roc_auc"], "test_accuracy": c["accuracy"],
